@@ -8665,6 +8665,20 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             options._shadow_learning_state["review_phase"] = phase
         return review_model
 
+    async def test_control_discovery_review_explains_unproven_numeric_only_result(self) -> None:
+        options = self._wizard_options_flow()
+        self._seed_control_discovery_review(options, capabilities=[], phase="overview")
+        options._shadow_learning_state["overlay"]["manifest"]["skipped_controls"] = [
+            {"field_id": "soc", "field_name": "SOC threshold",
+             "reason": "numeric_needs_distinct_samples"}
+        ]
+        result = await options.async_step_shadow_learning_review()
+        self.assertEqual(result["step_id"], "shadow_learning_review")
+        overview = result["description_placeholders"]["control_discovery_overview"]
+        self.assertIn("SOC threshold", overview)
+        self.assertIn("Not enough distinct", overview)
+        self.assertNotIn("enabled_controls", result["data_schema"].schema)
+
     async def test_control_discovery_review_edit_lists_controls_as_checkboxes(self) -> None:
         options = self._wizard_options_flow()
         self._seed_control_discovery_review(options)  # phase="edit" by default

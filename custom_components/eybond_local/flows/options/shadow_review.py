@@ -21,6 +21,8 @@ from .shared import (
 from ...support.shadow_learning.review_model import (
     build_activation_selection,
     default_learned_control_label,
+    unpromoted_control_rows,
+    unpromoted_controls_markdown,
 )
 from ...support.cloud_local_coverage import (
     CLOUD_LOCAL_STATUS_AVAILABLE_CARRIED,
@@ -121,6 +123,7 @@ class ShadowLearningReviewMixin:
         already_reads = self._control_discovery_already_supported_read_sensors()
         inconclusive_reads = self._control_discovery_inconclusive_read_sensors()
         metadata_fields = self._control_discovery_metadata_fields()
+        unpromoted = unpromoted_control_rows(self._shadow_learning_state)
 
         if (
             metadata_fields
@@ -129,6 +132,7 @@ class ShadowLearningReviewMixin:
             and not new_reads
             and not already_reads
             and not inconclusive_reads
+            and not unpromoted
         ):
             learning_engine = self._control_discovery_learning_engine(coordinator)
             collection_supported = bool(
@@ -237,6 +241,7 @@ class ShadowLearningReviewMixin:
             and not new_reads
             and not already_reads
             and not inconclusive_reads
+            and not unpromoted
         ):
             return await self.async_step_shadow_learning_result()
 
@@ -279,7 +284,8 @@ class ShadowLearningReviewMixin:
                     new_reads,
                     already_reads,
                     inconclusive_reads,
-                ),
+                ) + ("\n\n" + unpromoted_controls_markdown(unpromoted, self._tr)
+                     if unpromoted else ""),
             }
             return self.async_show_form(
                 step_id="shadow_learning_review",

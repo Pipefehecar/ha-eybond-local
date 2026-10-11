@@ -320,7 +320,7 @@ class ShadowLearningRunMixin:
         labels = {
             LEARNING_METHOD_READ_ONLY_EVIDENCE: self._tr(
                 "common.dynamic.cloud_learning_method_read_only",
-                "Analyze device data (recommended)",
+                "Analyze device data (diagnostics)",
             ),
             LEARNING_METHOD_ACTIVE_CORRELATION: self._tr(
                 "common.dynamic.cloud_learning_method_active",

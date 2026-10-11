@@ -62,9 +62,9 @@ class DessMonitorActiveCorrelationOperation(CloudActiveCorrelationOperation):
                 session=cloud_session,
                 collector_pn=collector_pn,
                 timeout=self.timeout_policy.metadata_request,
-                # Active correlation needs the provider-declared choice values,
-                # not a slow best-effort sweep of current values. Current-only
-                # numeric controls remain excluded rather than being invented.
+                # Metadata defines choices/hints. Numeric command discovery
+                # uses bounded intercepted probes, not a slow best-effort
+                # current-value sweep or a model-specific voltage range.
                 max_control_values=0,
                 required_actions=("queryDeviceCtrlField",),
             )

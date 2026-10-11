@@ -10,6 +10,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from ...cloud_numeric_learning import numeric_learning_candidates
 from ...dessmonitor_cloud import (
     DEFAULT_BASE_URL,
     DEFAULT_LANGUAGE,
@@ -96,7 +97,7 @@ def build_dessmonitor_learning_plan(
     all_choice_values: bool = True,
     max_fields: int = 0,
 ) -> list[dict[str, Any]]:
-    """Build a bounded plan without inventing provider control values."""
+    """Build a bounded protected plan; numeric probes are not operating limits."""
 
     if type(control_fields) is not tuple or any(
         type(item) is not DessMonitorControlField for item in control_fields
@@ -125,13 +126,16 @@ def build_dessmonitor_learning_plan(
             alternatives = [
                 choice for choice in values if choice[0] != field.current_value
             ]
-            selected = alternatives or values[:1]
+            selected = values if all_choice_values else (alternatives or values[:1])
             if not all_choice_values:
                 selected = selected[:1]
             value_source = "choice"
-        elif field.current_value:
-            selected = [(field.current_value, "")]
-            value_source = "current"
+        elif field.current_value or field.unit or field.hint:
+            probes = numeric_learning_candidates(
+                hint=field.hint, unit=field.unit, current=field.current_value,
+            )
+            selected = [(probe["value"], "") for probe in probes]
+            value_source = "numeric_probe"
         else:
             continue
 
@@ -147,6 +151,8 @@ def build_dessmonitor_learning_plan(
                     "value_source": value_source,
                     "action": "dessmonitor_ctrlDevice",
                     "read_key": "",
+                    **({"numeric_evidence": dict(probes[0]["numeric_evidence"])}
+                       if value_source == "numeric_probe" else {}),
                 }
             )
         planned_fields += 1
@@ -365,6 +371,8 @@ async def async_orchestrate_dessmonitor_shadow_learning(
             "value_source": item["value_source"],
             "action": item["action"],
             "read_key": item["read_key"],
+            **({"numeric_evidence": dict(item["numeric_evidence"])}
+               if "numeric_evidence" in item else {}),
             "unknown_field": False,
         }
         if not await _session_ready(
@@ -474,6 +482,13 @@ async def async_orchestrate_dessmonitor_shadow_learning(
     )
     return {
         "planned_write_count": len(plan),
+        "skipped_controls": [
+            {"field_id": field.field_id, "field_name": field.title,
+             "reason": "no_usable_control_values"}
+            for field in control_fields
+            if not field.choices and not (field.current_value or field.unit or field.hint)
+            and not _field_is_destructive(field)
+        ],
         "plan": plan,
         "executed_result_count": len(attempts),
         "sent_count": sum(1 for item in attempts if item["status"] == _STATUS_SENT),

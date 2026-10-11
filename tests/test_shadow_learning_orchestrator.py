@@ -288,8 +288,9 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
             ],
         )
         self.assertEqual(with_numeric[-1]["field_id"], "bat_eybond_ctrl_76")
-        self.assertEqual(with_numeric[-1]["value"], "1")
-        self.assertEqual(with_numeric[-1]["value_source"], "hint_min")
+        self.assertEqual([item["value"] for item in with_numeric[-2:]], ["1", "2"])
+        self.assertEqual(with_numeric[-1]["value_source"], "numeric_probe")
+        self.assertEqual(with_numeric[-1]["numeric_evidence"]["range_source"], "provider_hint")
         self.assertEqual(with_numeric, build_learn_settings_plan(
             settings_dat,
             field_ids=["sys_eybond_ctrl_53", "bat_eybond_ctrl_76"],

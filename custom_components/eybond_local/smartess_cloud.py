@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .cloud_numeric_learning import numeric_learning_candidates
 from .cloud_signing import password_signature, session_signature
 from .metadata.smartess_semantic_catalog_loader import (
     resolve_smartess_cloud_classification,
@@ -33,9 +34,6 @@ CONTROL_DISCOVERY_RETRY_DELAY_SECONDS = 0.5
 
 
 logger = logging.getLogger(__name__)
-
-
-_HINT_RANGE_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*(?:~|-|to)\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
 _SMARTESS_0925_EXACT = "exact_0925"
@@ -662,7 +660,7 @@ def build_learn_settings_plan(
     numeric_value: str = DEFAULT_LEARN_NUMERIC_VALUE,
     all_choice_values: bool = False,
     max_fields: int = 0,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Return deterministic plan items for SmartESS learn-settings orchestration."""
 
     if not isinstance(dat, dict):
@@ -674,7 +672,7 @@ def build_learn_settings_plan(
     if not isinstance(fields, list):
         return []
 
-    plan: list[dict[str, str]] = []
+    plan: list[dict[str, Any]] = []
     visited_fields = 0
     for raw_field in fields:
         if not isinstance(raw_field, dict):
@@ -706,6 +704,8 @@ def build_learn_settings_plan(
                     "value": candidate["value"],
                     "value_label": candidate.get("label", ""),
                     "value_source": candidate["source"],
+                    **({"numeric_evidence": candidate["numeric_evidence"]}
+                       if "numeric_evidence" in candidate else {}),
                 }
             )
     return plan
@@ -717,7 +717,7 @@ def _candidate_learn_setting_values(
     include_numeric: bool,
     numeric_value: str,
     all_choice_values: bool,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     choices = field.get("item")
     if isinstance(choices, list) and choices:
         candidates: list[dict[str, str]] = []
@@ -740,21 +740,11 @@ def _candidate_learn_setting_values(
 
     if not include_numeric:
         return []
-    hint_value = _first_numeric_hint_value(str(field.get("hint") or ""))
-    return [
-        {
-            "value": hint_value or str(numeric_value),
-            "label": "",
-            "source": "hint_min" if hint_value else "numeric_default",
-        }
-    ]
-
-
-def _first_numeric_hint_value(hint: str) -> str:
-    match = _HINT_RANGE_RE.search(hint)
-    if not match:
-        return ""
-    return match.group(1)
+    current, _ = _extract_current_value(field)
+    return numeric_learning_candidates(
+        hint=field.get("hint", ""), unit=field.get("unit", ""),
+        current=current, fallback=numeric_value,
+    )
 
 
 def _resolve_smartess_0925_setting_classification(normalized_title: str) -> dict[str, Any]:

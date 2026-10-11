@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Active control learning shares numeric command evidence across SmartESS,
+  DESSMonitor and generic ValueCloud controls. Missing cloud ranges no longer
+  exclude numeric discovery; two intercepted values must agree on the supported
+  Modbus encoding. Provider hint ranges remain device-scoped, writes remain
+  untested, and incomplete captures receive explicit review explanations.
+  Existing G-ASCII command codecs and read-only cloud analysis are unchanged.
+
 - PI30 devices without model-specific charge-current controls can expose
   **Max Total Charge Current** and **Max Utility Charge Current** in Full
   Control, using only the selectable values read from that inverter (#58).

@@ -34,11 +34,57 @@ _ACCEPTED_CONFIDENCE: frozenset[str] = frozenset({"high", "medium"})
 
 # Value kinds the classifier understands well enough to consider default-enabling.
 _KNOWN_VALUE_KINDS: frozenset[str] = frozenset(
-    {"bool", "enum", "action", "u16", "u32_high_first", "u32_low_first"}
+    {"bool", "enum", "action", "u16", "scaled_u16", "u32_high_first", "u32_low_first"}
 )
 _NUMERIC_VALUE_KINDS: frozenset[str] = frozenset(
-    {"u16", "u32_high_first", "u32_low_first"}
+    {"u16", "scaled_u16", "u32_high_first", "u32_low_first"}
 )
+
+
+def unpromoted_control_rows(state: dict) -> list[dict]:
+    """Keep failed/incomplete command evidence visible without exposing secrets."""
+    overlay = state.get("overlay") or {}
+    manifest = overlay.get("manifest") or {}
+    orchestration = state.get("orchestration") or {}
+    rows = list(manifest.get("skipped_controls") or [])
+    rows.extend(orchestration.get("skipped_controls") or [])
+    for attempt in orchestration.get("results") or []:
+        if attempt.get("status") in {"captured_not_applied", "planned"}:
+            continue
+        rows.append({"field_id": attempt.get("field_id"),
+                     "field_name": attempt.get("field_name") or attempt.get("title"),
+                     "reason": "cloud_command_not_captured"})
+    output = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("field_id") or row.get("field_name") or "")
+        if key and key not in output:
+            output[key] = {"field_name": str(row.get("field_name") or key),
+                           "reason": str(row.get("reason") or "unproven_modbus_write_contract")}
+    return list(output.values())
+
+
+def unpromoted_controls_markdown(rows, translate) -> str:
+    if not rows:
+        return ""
+    heading = translate("common.dynamic.control_learning_unproven_heading",
+                        "Controls not added in this run")
+    lines = [f"**{heading}**", ""]
+    for row in rows:
+        reason = row["reason"]
+        if reason == "numeric_needs_distinct_samples":
+            key, fallback = "samples", "Not enough distinct commands were captured to confirm value encoding."
+        elif reason == "cloud_command_not_captured":
+            key, fallback = "capture", "The cloud command was rejected or no matching local command was captured."
+        elif reason == "no_usable_control_values":
+            key, fallback = "metadata", "The cloud did not provide usable setting metadata."
+        else:
+            key, fallback = "encoding", "The captured command format or value encoding could not be confirmed."
+        message = translate(f"common.dynamic.control_learning_unproven_{key}", fallback)
+        name = str(row["field_name"]).replace("\n", " ").strip()
+        lines.append(f"- {name} — {message}")
+    return "\n".join(lines)
 
 
 def classify_learned_control_risk(capability: dict[str, Any]) -> dict[str, Any]:

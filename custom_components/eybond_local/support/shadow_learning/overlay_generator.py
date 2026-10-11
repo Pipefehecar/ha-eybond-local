@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ...cloud_numeric_learning import classify_numeric_encoding
 from ...collector_identity import pn_is_same_identity
 from ...metadata.local_metadata import (
     _dump_json,
@@ -991,6 +992,10 @@ def _build_learned_capabilities(
             continue
 
         classification = _classify_learned_control(group)
+        if reason := classification.get("rejection_reason"):
+            rejected_summary.append({"field_id": field_id, "field_name": field_name,
+                                     "register": register, "reason": reason})
+            continue
         if write_contract is not None and (
             write_contract[1] != 1
             or classification["word_count"] != write_contract[1]
@@ -1179,6 +1184,8 @@ def _group_matched_records(correlation: dict[str, Any]) -> list[dict[str, Any]]:
                 "requested_value": requested_value,
                 "value_label": str(item.get("value_label") or "").strip(),
                 "value_source": str(item.get("value_source") or "").strip(),
+                **({"numeric_evidence": dict(item["numeric_evidence"])}
+                   if isinstance(item.get("numeric_evidence"), dict) else {}),
                 "requested_at": str(item.get("requested_at") or "").strip(),
                 "observation": {
                     "register": register,
@@ -1567,6 +1574,11 @@ def _classify_learned_control(group: dict[str, Any]) -> dict[str, Any]:
     field_id = str(group.get("field_id") or "")
     normalized_text = _normalize_title(f"{field_name} {field_id}")
     samples = list(group.get("samples") or [])
+
+    if any("numeric_evidence" in sample for sample in samples):
+        if any(keyword in normalized_text for keyword in _DESTRUCTIVE_KEYWORDS):
+            return {"rejection_reason": "destructive_numeric_control"}
+        return classify_numeric_encoding(samples)
 
     requested_values = [str(sample.get("requested_value") or "").strip() for sample in samples]
     unique_requested = _unique_ordered(requested_values)

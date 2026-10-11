@@ -27,8 +27,11 @@ Choose the task by the result you need:
 | **Analyze device data** | Collects cloud metadata and available history for support and comparison with local readings. | No |
 | **Verify additional local controls** | Temporarily checks whether cloud fields can be matched safely to local reads or controls. | Only inside the protected verification described on screen |
 
-Start with **Analyze device data** unless a developer asks you to verify a
-specific control.
+Choose **Analyze device data** when investigating readings or collecting support
+information. If the goal is a missing setting that already exists in the cloud
+app, use **Verify additional local controls** when it is available and you can
+accept its connection-change and interception precautions. You do not need to
+run read-only analysis first: active verification collects its own metadata.
 
 ## When to use it
 
@@ -104,8 +107,9 @@ differ. Follow the current on-screen text when it differs from an image.
 
 ## What happens during learning
 
-Home Assistant first asks what you want to do. Read-only analysis is the
-recommended default; control verification is a separate advanced task. If more
+Home Assistant first asks what you want to do. Read-only analysis collects
+diagnostics; control verification is the separate advanced task for adding
+missing cloud controls. If more
 than one API can perform the selected task, the next step asks which API to use.
 Choosing an API never silently changes the task.
 
@@ -169,6 +173,25 @@ driver is available. A failed check also records its source and workflow stage
 in the Support Archive, without saving your cloud password.
 
 The goal is to learn what the device supports without permanently changing inverter settings.
+
+### Numeric settings
+
+For supported Modbus numeric commands, active verification captures two distinct
+test values to check how the displayed number is encoded. These commands are
+intercepted, not applied to the inverter. A test value is not a recommended
+setting or evidence of the inverter's permitted operating range.
+
+When a cloud hint supplies an unambiguous range, it stays attached to this
+device's learned control. A 24 V device's limits are not reused for a 48 V device
+merely because both use the same registers. A missing range does not prevent
+command discovery. The inverter must still accept the actual setting when you
+later use the control; successful interception does not mark writes as tested.
+
+Incomplete, contradictory, signed or unsupported multiword numeric encodings
+are not guessed. The review explains why a captured control was not added, and
+the Support Archive retains the evidence. If the cloud rejects the probes,
+share that result instead of repeatedly rerunning learning. Existing learned
+profiles are not silently rewritten; rerun learning to generate a new result.
 
 If the safe learning path is not ready, the integration stops instead of continuing.
 

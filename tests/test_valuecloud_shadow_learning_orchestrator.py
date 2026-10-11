@@ -181,6 +181,7 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
                 ("cltd_lcd_backlight", "0"),
                 ("cltd_lcd_backlight", "1"),
                 ("cltd_max_charging_current", "15.0"),
+                ("cltd_max_charging_current", "16.0"),
             ],
         )
         self.assertTrue(all(item["field_id"] != "cltd_restore_default" for item in plan))

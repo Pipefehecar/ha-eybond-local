@@ -106,6 +106,8 @@ def orchestrate_shadow_learning_settings(
             "requested_value": str(item["value"]),
             "value_label": str(item.get("value_label") or ""),
             "value_source": str(item["value_source"]),
+            **({"numeric_evidence": dict(item["numeric_evidence"])}
+               if "numeric_evidence" in item else {}),
             "action": "ctrlDevice",
             "dry_run": bool(dry_run),
             "unknown_field": str(item["field_id"]) not in known_field_ids,
@@ -276,6 +278,8 @@ async def async_orchestrate_shadow_learning_settings(
             "requested_value": str(item["value"]),
             "value_label": str(item.get("value_label") or ""),
             "value_source": str(item["value_source"]),
+            **({"numeric_evidence": dict(item["numeric_evidence"])}
+               if "numeric_evidence" in item else {}),
             "action": "ctrlDevice",
             "dry_run": bool(dry_run),
             "unknown_field": str(item["field_id"]) not in known_field_ids,
@@ -463,6 +467,8 @@ def summarize_shadow_learning_attempts(
                     # select vs button) instead of guessing from raw swept values.
                     "value_label": str(attempt.get("value_label") or ""),
                     "value_source": str(attempt.get("value_source") or ""),
+                    **({"numeric_evidence": dict(attempt["numeric_evidence"])}
+                       if "numeric_evidence" in attempt else {}),
                     "read_key": str(attempt.get("read_key") or ""),
                     "requested_at": str(attempt.get("requested_at") or ""),
                     "unknown_field": bool(attempt.get("unknown_field")),
@@ -555,6 +561,8 @@ def correlate_cloud_attempts_with_shadow_writes(
                 "requested_value": str(attempt.get("requested_value") or ""),
                 "value_label": str(attempt.get("value_label") or ""),
                 "value_source": str(attempt.get("value_source") or ""),
+                **({"numeric_evidence": dict(attempt["numeric_evidence"])}
+                   if "numeric_evidence" in attempt else {}),
                 "read_key": str(attempt.get("read_key") or ""),
                 "requested_at": str(attempt.get("requested_at") or ""),
                 "unknown_field": bool(attempt.get("unknown_field")),

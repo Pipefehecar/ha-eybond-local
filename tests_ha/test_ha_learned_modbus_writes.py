@@ -40,7 +40,7 @@ _LEVEL_REGISTER = 20250
 _MODE_REGISTER = 20251
 
 
-def _correlation(target: ProbeTarget) -> dict:
+def _correlation(target: ProbeTarget, numeric_evidence=False) -> dict:
     """One FC06 numeric setting and one single-word FC16 enum setting."""
 
     matched = []
@@ -69,6 +69,14 @@ def _correlation(target: ProbeTarget) -> dict:
                 },
             }
         )
+    if numeric_evidence:
+        evidence = {"kind": "number", "unit": "%", "sample_source": "probe_only"}
+        if numeric_evidence == "scaled":
+            evidence.update(minimum="0.0", maximum="10.0", range_source="provider_hint")
+            matched[0]["requested_value"] = "2.0"
+        matched[0]["numeric_evidence"] = evidence
+        matched.append({**matched[0], "sequence_index": len(matched), "requested_value": "2.1" if numeric_evidence == "scaled" else "21",
+                        "observation": {**matched[0]["observation"], "values": [21]}})
     return {
         "matched": matched,
         "matched_count": len(matched),
@@ -78,8 +86,9 @@ def _correlation(target: ProbeTarget) -> dict:
 
 
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
+@pytest.mark.parametrize("numeric_evidence", [False, True, "scaled"])
 async def test_generated_must_overlay_activation_and_modbus_service_writes(
-    hass, fake_runtime, monkeypatch, tmp_path, mode
+    hass, fake_runtime, monkeypatch, tmp_path, mode, numeric_evidence
 ):
     from conftest import FakeRuntimeManager
 
@@ -217,7 +226,7 @@ async def test_generated_must_overlay_activation_and_modbus_service_writes(
                 "devaddr": target.collector_addr,
                 "write_response_mode": "exception",
             },
-            correlation=_correlation(target),
+            correlation=_correlation(target, numeric_evidence),
         )
         return result, json.loads(result.profile_path.read_text(encoding="utf-8"))
 
@@ -290,6 +299,9 @@ async def test_generated_must_overlay_activation_and_modbus_service_writes(
                 assert registry.async_get(entity_id).disabled_by is None
                 assert hass.states.get(entity_id) is not None
                 assert hass.states.get(entity_id).state != "unavailable"
+                if kind == "number" and numeric_evidence == "scaled":
+                    assert hass.states.get(entity_id).attributes["max"] == 10.0
+                    assert hass.states.get(entity_id).attributes["step"] == 0.1
                 assert entity_id == entity_ids.setdefault(register, entity_id)
         assert runtime_writes == write_frames == []
         if reload_index == 0:
@@ -299,8 +311,8 @@ async def test_generated_must_overlay_activation_and_modbus_service_writes(
 
     if mode != "read_only":
         for kind, register, function, native, raw in (
-            ("number", _LEVEL_REGISTER, 6, 25, 25),
-            ("number", _LEVEL_REGISTER, 6, 20, 20),
+            ("number", _LEVEL_REGISTER, 6, 2.5 if numeric_evidence == "scaled" else 25, 25),
+            ("number", _LEVEL_REGISTER, 6, 2.0 if numeric_evidence == "scaled" else 20, 20),
             ("select", _MODE_REGISTER, 16, "Mode B", 4),
             ("select", _MODE_REGISTER, 16, "Mode A", 3),
         ):

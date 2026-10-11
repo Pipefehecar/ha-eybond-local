@@ -78,7 +78,7 @@ class DessMonitorPlanTests(unittest.TestCase):
 
         self.assertEqual(
             [(item["field_id"], item["value"]) for item in plan],
-            [("mode", "1"), ("mode", "2"), ("limit", "55")],
+            [("mode", "0"), ("mode", "1"), ("mode", "2"), ("limit", "55"), ("limit", "56")],
         )
         self.assertTrue(all(item["action"] == "dessmonitor_ctrlDevice" for item in plan))
         self.assertNotIn("factory_reset", {item["field_id"] for item in plan})
@@ -90,13 +90,13 @@ class DessMonitorPlanTests(unittest.TestCase):
             [item["value"] for item in build_dessmonitor_learning_plan(
                 (MODE, NUMERIC), max_fields=1
             )],
-            ["1", "2"],
+            ["0", "1", "2"],
         )
         self.assertEqual(
             [item["field_id"] for item in build_dessmonitor_learning_plan(
                 (MODE, NUMERIC), field_ids=("limit",), max_fields=40
             )],
-            ["limit"],
+            ["limit", "limit"],
         )
 
     def test_plan_boundary_is_exact_and_fail_closed(self) -> None:
@@ -115,6 +115,25 @@ class DessMonitorPlanTests(unittest.TestCase):
 
 
 class DessMonitorOrchestratorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_numeric_metadata_survives_protected_capture(self) -> None:
+        observations = []
+
+        def action(**kwargs):
+            value = int(kwargs["value"])
+            observations.append(ShadowWriteObservation(
+                register=1234, values=(value,), function_code=6,
+                devcode=2304, devaddr=1, raw_payload_hex=f"{value:04x}",
+            ))
+            return DessMonitorApiEnvelope(err=0, desc="ok", dat={})
+
+        result = await self._run(
+            action=action, observations=observations,
+            control_fields=(DessMonitorControlField(field_id="soc", title="SOC threshold", unit="%"),),
+        )
+        self.assertEqual(result["captured_not_applied_count"], 2)
+        self.assertEqual([item["requested_value"] for item in result["correlation"]["matched"]], ["1", "2"])
+        self.assertTrue(all(item["numeric_evidence"]["kind"] == "number" for item in result["correlation"]["matched"]))
+
     async def _run(self, *, action, observations=None, ready=True, **overrides):
         captured = [] if observations is None else observations
 
@@ -192,7 +211,7 @@ class DessMonitorOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["leaked_count"], 1)
         self.assertEqual(result["executed_result_count"], 1)
-        self.assertEqual(calls, ["1"])
+        self.assertEqual(calls, ["0"])
 
     async def test_unready_session_sends_nothing(self) -> None:
         calls = []
@@ -215,7 +234,7 @@ class DessMonitorOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(TimeoutError):
             await self._run(action=action, all_choice_values=True)
-        self.assertEqual(calls, ["1"])
+        self.assertEqual(calls, ["0"])
 
     async def test_strict_runtime_boundary_rejects_ducks_before_dispatch(self) -> None:
         calls = []

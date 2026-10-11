@@ -821,6 +821,7 @@ def _normalize_control_fields(
                 unit=_text(row.get("unit")),
                 hint=_text(row.get("hint")),
                 choices=tuple(choices),
+                current_value=_text(row.get("val")),
             )
         )
     return tuple(output)
@@ -841,7 +842,7 @@ def _with_control_values(
     transport_unavailable = False
     planned_queries = min(len(fields), max_values)
     for index, item in enumerate(fields):
-        current = ""
+        current = item.current_value
         if index < max_values and not transport_unavailable:
             try:
                 envelope = fetch(

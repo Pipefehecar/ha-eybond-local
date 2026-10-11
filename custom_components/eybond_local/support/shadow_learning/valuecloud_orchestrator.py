@@ -9,6 +9,7 @@ import re
 import time
 from typing import Any, Awaitable, Callable
 
+from ...cloud_numeric_learning import numeric_learning_candidates
 from ...eybond_g_ascii_settings import G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD
 from ...valuecloud_cloud import (
     ctrl_device_value,
@@ -166,6 +167,8 @@ async def async_orchestrate_valuecloud_shadow_learning(
             "requested_value": str(item["value"]),
             "value_label": str(item.get("value_label") or ""),
             "value_source": str(item["value_source"]),
+            **({"numeric_evidence": dict(item["numeric_evidence"])}
+               if "numeric_evidence" in item else {}),
             "action": str(item.get("action") or "valuecloud_batch_setUp"),
             "transport": str(item.get("transport") or "batch_setUp"),
             "dry_run": bool(dry_run),
@@ -429,6 +432,22 @@ def _extend_plan_for_field(
     if not include_numeric:
         return
     current_value = _field_current_value(field)
+    # Known G-ASCII controls have their own explicit command codec. Generic
+    # numeric fields need correlated samples, not a guessed Modbus register.
+    if field_id not in G_ASCII_SETTINGS_BY_VALUECLOUD_FIELD:
+        for candidate in numeric_learning_candidates(
+            hint=field.get("hint", ""), unit=field.get("unit", ""),
+            current=current_value or "",
+        ):
+            item = _plan_item(
+                field=field, control_item_id=control_item_id,
+                value=candidate["value"], value_label="", value_source="numeric_probe",
+                transport=transport,
+            )
+            item["numeric_evidence"] = candidate["numeric_evidence"]
+            plan.append(item)
+        planned_field_ids.add(field_id)
+        return
     if current_value is None:
         return
     plan.append(
