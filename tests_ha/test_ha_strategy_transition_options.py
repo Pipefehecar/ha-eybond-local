@@ -182,7 +182,15 @@ async def test_options_strategy_transition_inbound_to_callback(
                 await coordinator.async_refresh()
                 snapshot = coordinator.data
                 if snapshot is not None and snapshot.connected:
-                    break
+                    # Connected data may belong to the coordinator that just
+                    # scheduled its first-metadata reload. Drain HA's lifecycle
+                    # before opening options; do not race a legitimate runtime
+                    # unavailable guard (especially on HA 2026.2).
+                    await hass.async_block_till_done()
+                    if (entry.state is ConfigEntryState.LOADED
+                            and entry.runtime_data is coordinator
+                            and not coordinator._entity_platform_reload_requested):
+                        break
                 if not service._connection_alive():
                     await service.handle_discovery(redirect, ("127.0.0.1", 0))
                 assert (
