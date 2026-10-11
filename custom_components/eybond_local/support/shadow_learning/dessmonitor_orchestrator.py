@@ -293,6 +293,7 @@ async def async_orchestrate_dessmonitor_shadow_learning(
     timeout: float = DEFAULT_TIMEOUT,
     correlation_timeout_seconds: float = 2.0,
     action: Callable[..., DessMonitorApiEnvelope] = send_device_control,
+    http_session=None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Correlate explicit DESSMonitor actions with writes on the exact route."""
@@ -401,6 +402,7 @@ async def async_orchestrate_dessmonitor_shadow_learning(
                 base_url=base_url,
                 language=language,
                 timeout=request_timeout,
+                **({"http_session": http_session} if http_session is not None else {}),
             )
             if type(envelope) is not DessMonitorApiEnvelope:
                 raise TypeError("dessmonitor_learning_response_invalid")

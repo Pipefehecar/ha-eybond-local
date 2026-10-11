@@ -3,6 +3,30 @@
 Cloud learning is an optional evidence workflow. It is not a runtime telemetry
 transport and it never makes cloud data authoritative over local registers.
 
+## Ordinary active-learning HTTPS lifetime
+
+SmartESS and DESSMonitor active correlation providers own one `CloudHttpSession`
+around their awaited control orchestrator, after metadata/identity preparation.
+Construction is pure; TLS and HTTP run in the existing retained blocking worker.
+The resource is explicitly passed through the orchestrator to the provider API,
+not stored in an account-wide pool or HA's global HTTP session. Direct callers
+without an injected resource retain their previous behavior, including dry runs.
+
+`async_dispatch_cloud_action` drains an outstanding worker even on repeated
+cancellation. Only after the orchestrator returns or raises does the provider
+close its resource; route cleanup therefore cannot race that request. Unknown
+delivery aborts the run without replay. Complete responses permit reuse; failed
+requests invalidate the resource. A later, separately initiated run creates a
+new resource. SmartESS metadata-login/control-login ordering is unchanged.
+
+The shared client pins HTTPS origin/path, verifies TLS, rejects redirects,
+bounds response bodies and detects truncation. Failure logs contain only phase,
+closed reason, reuse flag and elapsed time; never signed URLs or exception text.
+The `connect` phase includes DNS/TCP/TLS and does not distinguish their timeout
+causes or prove vendor queue settlement. Read-only preparation, ValueCloud,
+collector polling and endpoint recovery policy are unchanged. No Bridge runtime
+or persistent Bridge guards are needed for this ordinary-learning resource.
+
 Four typed concepts deliberately model different questions:
 
 - `CloudEvidenceProvider` identifies the cloud ecosystem that owns existing

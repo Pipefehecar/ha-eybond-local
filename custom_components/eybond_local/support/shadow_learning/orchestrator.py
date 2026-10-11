@@ -228,6 +228,7 @@ async def async_orchestrate_shadow_learning_settings(
     timeout: float = DEFAULT_TIMEOUT,
     correlation_timeout_seconds: float = 2.0,
     fetch_action: Callable[..., Any] = fetch_signed_action,
+    http_session=None,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     """Plan and execute one SmartESS learn-settings run with async per-attempt observation correlation.
@@ -315,6 +316,7 @@ async def async_orchestrate_shadow_learning_settings(
                 app_id=app_id,
                 app_version=app_version,
                 timeout=timeout,
+                **({"http_session": http_session} if http_session is not None else {}),
             )
             attempt["status"] = _CONTROL_STATUS_SENT
             attempt["delivery_outcome"] = "response"

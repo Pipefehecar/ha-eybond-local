@@ -399,18 +399,22 @@ def _decode_response_body(body: bytes) -> str:
     return text
 
 
-def _http_get_json(url: str, *, timeout: float) -> DessMonitorApiEnvelope:
+def _http_get_json(url: str, *, timeout: float, http_session=None) -> DessMonitorApiEnvelope:
     request = Request(
         url,
         headers={"User-Agent": "DessMonitor/3.6.2.1", "Accept": "application/json"},
         method="GET",
     )
     try:
-        with urlopen(request, timeout=_strict_timeout(timeout)) as response:
-            body = response.read(DEFAULT_MAX_RESPONSE_BYTES + 1)
-            if len(body) > DEFAULT_MAX_RESPONSE_BYTES:
-                raise DessMonitorCloudError("response_too_large")
-            payload = _decode_response_body(body)
+        if http_session is None:
+            with urlopen(request, timeout=_strict_timeout(timeout)) as response:
+                body = response.read(DEFAULT_MAX_RESPONSE_BYTES + 1)
+                if len(body) > DEFAULT_MAX_RESPONSE_BYTES:
+                    raise DessMonitorCloudError("response_too_large")
+        else:
+            body = http_session.get(url, headers=dict(request.header_items()), timeout=_strict_timeout(timeout),
+                                    max_bytes=DEFAULT_MAX_RESPONSE_BYTES)
+        payload = _decode_response_body(body)
     except HTTPError as exc:
         raise DessMonitorCloudError(f"http_error:{exc.code}") from exc
     except URLError as exc:
@@ -549,6 +553,7 @@ def fetch_signed_action(
     base_url: str = DEFAULT_BASE_URL,
     language: str = DEFAULT_LANGUAGE,
     timeout: float = DEFAULT_TIMEOUT,
+    http_session=None,
 ) -> DessMonitorApiEnvelope:
     stage = action.split("&", 2)[1].removeprefix("action=")
     try:
@@ -560,6 +565,7 @@ def fetch_signed_action(
                 language=language,
             ),
             timeout=timeout,
+            **({"http_session": http_session} if http_session is not None else {}),
         )
     except DessMonitorCloudError as exc:
         if exc.stage:
@@ -620,6 +626,7 @@ def send_device_control(
     base_url: str = DEFAULT_BASE_URL,
     language: str = DEFAULT_LANGUAGE,
     timeout: float = DEFAULT_TIMEOUT,
+    http_session=None,
 ) -> DessMonitorApiEnvelope:
     """Send one explicit DESSMonitor control action through a typed session."""
 
@@ -635,6 +642,7 @@ def send_device_control(
         base_url=base_url,
         language=language,
         timeout=timeout,
+        **({"http_session": http_session} if http_session is not None else {}),
     )
 
 

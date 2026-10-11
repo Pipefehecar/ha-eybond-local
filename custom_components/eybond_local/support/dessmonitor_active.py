@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
+from ..cloud_http_session import CloudHttpSession
 from ..collector_identity import pn_is_same_identity
 from ..dessmonitor_cloud import (
+    DEFAULT_BASE_URL,
     DessMonitorEvidenceBundle,
     fetch_read_only_evidence_for_session,
     login_with_password,
@@ -85,20 +89,24 @@ class DessMonitorActiveCorrelationOperation(CloudActiveCorrelationOperation):
         await start_shadow_route()
         on_learning()
         progress(0.30, "testing")
-        result = await async_orchestrate_dessmonitor_shadow_learning(
-            control_fields=bundle.control_fields,
-            session=cloud_session,
-            identity=bundle.identity,
-            confirm_cloud_write=True,
-            shadow_session_state="learning",
-            field_ids=(),
-            all_choice_values=True,
-            max_fields=max_fields,
-            continue_on_error=True,
-            delay_seconds=0.0,
-            timeout=self.timeout_policy.action_request,
-            **dict(orchestrator_callbacks),
-        )
+        # The awaited dispatcher drains even repeatedly cancelled HTTP workers.
+        # Close only once that owner has returned; never race route recovery.
+        with closing(CloudHttpSession(DEFAULT_BASE_URL)) as http_session:
+            result = await async_orchestrate_dessmonitor_shadow_learning(
+                control_fields=bundle.control_fields,
+                session=cloud_session,
+                identity=bundle.identity,
+                confirm_cloud_write=True,
+                shadow_session_state="learning",
+                field_ids=(),
+                all_choice_values=True,
+                max_fields=max_fields,
+                continue_on_error=True,
+                delay_seconds=0.0,
+                timeout=self.timeout_policy.action_request,
+                http_session=http_session,
+                **dict(orchestrator_callbacks),
+            )
         result = dict(result)
         result["source"] = self.source_id
         result["metadata_only"] = False

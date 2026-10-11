@@ -33,6 +33,12 @@ app, use **Verify additional local controls** when it is available and you can
 accept its connection-change and interception precautions. You do not need to
 run read-only analysis first: active verification collects its own metadata.
 
+SmartESS and DESSMonitor active verification reuse a secure cloud connection
+within one run. This reduces repeated connections but cannot prevent every cloud
+timeout. If a test command's result is uncertain, the run stops without sending
+that command again automatically. Cancelling can take a little time because HA
+waits for an already started request to finish before connection cleanup.
+
 ## When to use it
 
 Use device learning when:

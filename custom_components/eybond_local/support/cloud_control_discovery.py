@@ -13,11 +13,14 @@ orchestrators are preserved exactly from the previous in-flow implementation.
 
 from __future__ import annotations
 
+from contextlib import closing
 import logging
 from typing import Any
 
 from .. import valuecloud_cloud as valuecloud_cloud_module
+from ..cloud_http_session import CloudHttpSession
 from ..smartess_cloud import (
+    DEFAULT_BASE_URL,
     build_device_detail_action,
     build_device_settings_action,
     fetch_control_discovery_bundle_for_collector,
@@ -149,25 +152,29 @@ class SmartEssActiveCorrelationOperation(CloudActiveCorrelationOperation):
 
         on_learning()
         progress(0.30, "testing")
-        result = await async_orchestrate_shadow_learning_settings(
-            settings_dat=settings_dat,
-            session=control_session,
-            pn=identity["pn"],
-            sn=identity["sn"],
-            devcode=identity["devcode"],
-            devaddr=identity["devaddr"],
-            dry_run=False,
-            confirm_cloud_write=True,
-            shadow_session_state="ready",
-            field_ids=[],
-            include_numeric=True,
-            all_choice_values=True,
-            max_fields=max_fields,
-            continue_on_error=True,
-            delay_seconds=0.0,
-            timeout=self.timeout_policy.action_request,
-            **dict(orchestrator_callbacks),
-        )
+        # The awaited dispatcher drains even repeatedly cancelled HTTP workers.
+        # Close only once that owner has returned; never race route recovery.
+        with closing(CloudHttpSession(DEFAULT_BASE_URL)) as http_session:
+            result = await async_orchestrate_shadow_learning_settings(
+                settings_dat=settings_dat,
+                session=control_session,
+                pn=identity["pn"],
+                sn=identity["sn"],
+                devcode=identity["devcode"],
+                devaddr=identity["devaddr"],
+                dry_run=False,
+                confirm_cloud_write=True,
+                shadow_session_state="ready",
+                field_ids=[],
+                include_numeric=True,
+                all_choice_values=True,
+                max_fields=max_fields,
+                continue_on_error=True,
+                delay_seconds=0.0,
+                timeout=self.timeout_policy.action_request,
+                http_session=http_session,
+                **dict(orchestrator_callbacks),
+            )
         result = dict(result)
         result["source"] = self.source_id
         result["metadata_only"] = False

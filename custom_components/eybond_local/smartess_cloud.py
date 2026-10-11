@@ -213,7 +213,7 @@ def _decode_response_body(body: bytes) -> str:
     return text
 
 
-def _http_get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> ApiEnvelope:
+def _http_get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT, http_session=None) -> ApiEnvelope:
     request = Request(
         url,
         headers={
@@ -223,8 +223,11 @@ def _http_get_json(url: str, *, timeout: float = DEFAULT_TIMEOUT) -> ApiEnvelope
         method="GET",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
-            payload = _decode_response_body(response.read())
+        if http_session is None:
+            with urlopen(request, timeout=timeout) as response:
+                payload = _decode_response_body(response.read())
+        else:
+            payload = _decode_response_body(http_session.get(url, headers=dict(request.header_items()), timeout=timeout))
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()
         raise SmartEssCloudError(f"http_error:{exc.code}:{detail}") from exc
@@ -380,6 +383,7 @@ def fetch_signed_action(
     app_id: str = DEFAULT_APP_ID,
     app_version: str = DEFAULT_APP_VERSION,
     timeout: float = DEFAULT_TIMEOUT,
+    http_session=None,
 ) -> ApiEnvelope:
     envelope = _http_get_json(
         build_signed_action_url(
@@ -391,6 +395,7 @@ def fetch_signed_action(
             app_version=app_version,
         ),
         timeout=timeout,
+        **({"http_session": http_session} if http_session is not None else {}),
     )
     if envelope.err != 0:
         raise SmartEssActionRejectedError(err=envelope.err, desc=envelope.desc)

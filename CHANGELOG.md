@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- SmartESS and DESSMonitor active Shadow Learning reuse one verified HTTPS
+  connection per control-discovery run. Unknown-delivery failures stop the run
+  without retrying commands; cancellation drains the outstanding request before
+  cleanup. Safe phase diagnostics omit signed URLs and credentials. Read-only
+  preparation, ValueCloud and ordinary polling are unchanged.
+
 - Active control learning shares numeric command evidence across SmartESS,
   DESSMonitor and generic ValueCloud controls. Missing cloud ranges no longer
   exclude numeric discovery; two intercepted values must agree on the supported
