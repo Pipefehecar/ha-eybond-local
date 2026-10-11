@@ -93,8 +93,12 @@ This confirms collector configuration, not cloud-service telemetry availability.
 DESSMonitor's [official API](https://api.dessmonitor.com/chapter5/ctrlDevice.html)
 documents `ctrlDevice`. The active engine authenticates and resolves an exact
 same-PN metadata bundle before opening the protected route, then sends only
-provider-declared choice values or the already-reported current value. It never
-invents a numeric value and excludes destructive-looking controls. Every action
+provider-declared choices or bounded numeric probes from the shared planner.
+Numeric probes use current values or optional provider hints when available,
+otherwise explicitly probe-only samples; they do not imply operating limits.
+Two distinct intercepted values must confirm the supported encoding before an
+ordinary learned numeric control can be generated. Destructive-looking controls
+remain excluded. Every action
 is matched only against writes observed after that action's exact route cursor;
 a successful cloud response without such an observation stops the run as a
 possible unproxied write. There is no fallback to SmartESS or ValueCloud.
