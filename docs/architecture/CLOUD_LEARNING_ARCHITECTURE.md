@@ -392,12 +392,18 @@ metadata compositor attaches a fresh plan beside the exact review and removes
 any stale or forged plan when either prerequisite cannot be reconstructed.
 
 An explicit downstream writer can turn that plan into one deterministic local
-register-schema file under `learned/dessmonitor_review/`. Immediately before
+register-schema file under `learned/<source_id>_review/` (for example,
+`learned/dessmonitor_review/` or `learned/smartess_review/`). The exact history
+source and provider are retained in the v2 plan/artifact and evidence digest;
+older inactive artifacts are not rewritten or automatically activated. Immediately before
 writing, it reloads the named source schema and rebuilds the complete overlay
 context; direct-constructor forgeries and schema/driver/claimed-register drift
 therefore fail before the local metadata directory is created. The file keeps
-the exact FC, register, divisor, signedness, semantic metadata, route context,
-and evidence digest. Its generated measurement keys use the guarded
+the exact FC, register, signedness, semantic metadata, route context and original
+correlation evidence. Its codec expresses values in the declared native unit:
+the admitted cloud kW/native W case uses the exact factor of 1000 while the
+original divisor remains in the evidence. Other unit conflicts are rejected.
+Its generated measurement keys use the guarded
 `learned_read_` prefix and are disabled by default. The write is an atomic
 single-file replace and an exact rerun is idempotent; an existing different
 file is never overwritten. The artifact remains marked

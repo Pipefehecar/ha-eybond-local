@@ -1,4 +1,4 @@
-"""Write one deterministic, inactive DESSMonitor local-read schema draft."""
+"""Write one deterministic, inactive, source-bound local-read schema draft."""
 
 from __future__ import annotations
 
@@ -20,16 +20,16 @@ from ..metadata.local_metadata import (
 from ..metadata.register_schema_loader import load_register_schema
 from ..models import ProbeTarget, decimals_for_divisor
 from .cloud_local_history_draft import (
-    CLOUD_LOCAL_READ_DRAFT_SOURCE,
     CloudLocalReadDraftItem,
     CloudLocalReadDraftPlan,
 )
 from .cloud_local_history_representability import (
     build_local_register_overlay_context,
 )
+from .cloud_semantic_evidence import CLOUD_SEMANTIC_STATUS_UNIT_CONFLICT
 
 
-CLOUD_LOCAL_READ_DRAFT_ARTIFACT_SCHEMA_VERSION = 1
+CLOUD_LOCAL_READ_DRAFT_ARTIFACT_SCHEMA_VERSION = 2
 CLOUD_LOCAL_READ_DRAFT_ARTIFACT_AUTHORITY = "inactive_review_artifact_only"
 
 _OUT_OF_BLOCK_SPEC_SET = "aux_config"
@@ -132,6 +132,7 @@ def generate_inactive_cloud_local_read_schema_draft(
         ).encode("utf-8")
     ).hexdigest()
     output_name = _output_schema_name(
+        source_id=plan.source_id,
         source_schema_name=source_schema_name,
         collector_pn=context.collector_pn,
         evidence_sha256=evidence_sha256,
@@ -139,11 +140,12 @@ def generate_inactive_cloud_local_read_schema_draft(
     if draft_activates_automatically(source_schema_name, output_name):
         raise ValueError("cloud_local_read_draft_would_activate")
 
-    fragment, generated = _schema_fragment(schema, plan.items)
+    fragment, generated = _schema_fragment(schema, plan.items, source_id=plan.source_id)
     manifest: dict[str, Any] = {
         "schema_version": CLOUD_LOCAL_READ_DRAFT_ARTIFACT_SCHEMA_VERSION,
         "authority": CLOUD_LOCAL_READ_DRAFT_ARTIFACT_AUTHORITY,
-        "source_id": CLOUD_LOCAL_READ_DRAFT_SOURCE,
+        "source_id": plan.source_id,
+        "provider_id": plan.provider_id,
         "status": "inactive_review_required",
         "local_mapping": "candidate_not_proven",
         "local_mapping_proven": False,
@@ -162,13 +164,14 @@ def generate_inactive_cloud_local_read_schema_draft(
     }
     schema_raw: dict[str, Any] = {
         "extends": source_schema_name,
-        "schema_key": f"local_dessmonitor_review_{evidence_sha256[:16]}",
-        "title": f"{schema.title} (DESSMonitor Review Draft)",
+        "schema_key": f"local_{_slug(plan.source_id)}_review_{evidence_sha256[:16]}",
+        "title": f"{schema.title} ({_source_label(plan.source_id)} Review Draft)",
         "driver_key": schema.driver_key,
         "protocol_family": schema.protocol_family,
         "draft_of": source_schema_name,
         "experimental": True,
-        "dessmonitor_read_draft": manifest,
+        # Retain the historical DESSMonitor metadata key for its own artifacts.
+        ("dessmonitor_read_draft" if plan.source_id == "dessmonitor" else "cloud_local_read_draft"): manifest,
         **fragment,
     }
     payload = _dump_json(schema_raw)
@@ -206,6 +209,7 @@ def generate_inactive_cloud_local_read_schema_draft(
 
 def _output_schema_name(
     *,
+    source_id: str,
     source_schema_name: str,
     collector_pn: str,
     evidence_sha256: str,
@@ -213,7 +217,7 @@ def _output_schema_name(
     source_stem = _slug(Path(source_schema_name).stem)
     collector_token = _slug(collector_pn)
     return (
-        "learned/dessmonitor_review/"
+        f"learned/{_slug(source_id)}_review/"
         f"{collector_token}/{source_stem}_{evidence_sha256[:16]}.json"
     )
 
@@ -221,6 +225,8 @@ def _output_schema_name(
 def _schema_fragment(
     schema: Any,
     items: tuple[CloudLocalReadDraftItem, ...],
+    *,
+    source_id: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     additions: dict[str, list[dict[str, Any]]] = {}
     measurements: list[dict[str, Any]] = []
@@ -230,7 +236,7 @@ def _schema_fragment(
         location = candidate.location
         semantic = item.semantic
         key = (
-            f"learned_read_dessmonitor_fc{location.function}_"
+            f"learned_read_{_slug(source_id)}_fc{location.function}_"
             f"{location.register}_{_slug(semantic.semantic_key)}"
         )
         set_name = _spec_set_for_location(
@@ -238,7 +244,8 @@ def _schema_fragment(
             function=location.function,
             register=location.register,
         )
-        decimals = decimals_for_divisor(candidate.divisor)
+        divisor, multiplier = _native_transform(item)
+        decimals = decimals_for_divisor(divisor)
         spec: dict[str, Any] = {
             "key": key,
             "function": location.function,
@@ -246,9 +253,11 @@ def _schema_fragment(
         }
         if candidate.signed:
             spec["signed"] = True
-        if candidate.divisor > 1:
-            spec["divisor"] = candidate.divisor
+        if divisor > 1:
+            spec["divisor"] = divisor
             spec["decimals"] = decimals
+        if multiplier != 1:
+            spec["multiplier"] = multiplier
         measurement: dict[str, Any] = {
             "key": key,
             "name": semantic.canonical_title,
@@ -276,7 +285,8 @@ def _schema_fragment(
                 "function": location.function,
                 "register": location.register,
                 "spec_set": set_name,
-                "divisor": candidate.divisor,
+                "divisor": divisor,
+                **({"multiplier": multiplier} if multiplier != 1 else {}),
                 "signed": candidate.signed,
             }
         )
@@ -297,6 +307,27 @@ def _schema_fragment(
         },
         generated,
     )
+
+
+def _source_label(source_id: str) -> str:
+    return {"dessmonitor": "DESSMonitor", "smartess": "SmartESS"}.get(source_id, "Cloud")
+
+
+def _native_transform(item: CloudLocalReadDraftItem) -> tuple[int, int]:
+    """Express the observed transform in the emitted unit, without inference.
+
+    Correlation permits exactly one unit-conflict exception: cloud kW against
+    native W. Keep that evidence unchanged in the plan; only convert the schema
+    codec. All admitted decimal divisors divide the exact SI factor of 1000.
+    """
+    semantic, candidate = item.semantic, item.candidate
+    if semantic.status != CLOUD_SEMANTIC_STATUS_UNIT_CONFLICT:
+        return candidate.divisor, 1
+    if (semantic.device_class != "power" or semantic.expected_unit != "W"
+            or semantic.observed_unit.casefold() != "kw"
+            or 1000 % candidate.divisor):
+        raise ValueError("cloud_local_read_draft_unit_transform_unproven")
+    return 1, 1000 // candidate.divisor
 
 
 def _spec_set_for_location(

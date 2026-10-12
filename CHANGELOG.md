@@ -104,6 +104,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Inactive cloud-history sensor drafts preserve the actual source and provider
+  instead of attributing SmartESS evidence to DESSMonitor. Power correlated in
+  kW is correctly encoded in the draft's native W unit. These review artifacts
+  remain inactive; existing sensors and controls are not changed automatically.
+
 - Proxy Capture recognizes CRC-checked raw PI30 commands when checking cloud
   session activity. Stopping or cancelling capture drains relay tasks and pending
   trace writes before closing the recording file. Startup diagnostics report

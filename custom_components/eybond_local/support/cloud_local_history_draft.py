@@ -1,7 +1,7 @@
 """Build an inactive local-read draft plan from review-only evidence.
 
 The plan is deliberately weaker than a learned mapping.  It preserves the
-exact DESSMonitor/local-history review and current route/schema compatibility,
+exact cloud/local-history review and current route/schema compatibility,
 then selects only unique, non-conflicting candidates that can be represented
 by an *inactive* draft.  It never writes metadata, activates an overlay, or
 grants a candidate local-mapping authority.
@@ -25,9 +25,8 @@ from .cloud_local_history_representability import (
 from .cloud_semantic_evidence import CloudSemanticObservation
 
 
-CLOUD_LOCAL_READ_DRAFT_SCHEMA_VERSION = 1
+CLOUD_LOCAL_READ_DRAFT_SCHEMA_VERSION = 2
 CLOUD_LOCAL_READ_DRAFT_AUTHORITY = "inactive_review_draft_plan_only"
-CLOUD_LOCAL_READ_DRAFT_SOURCE = "dessmonitor"
 
 
 def _required_token(value: object, reason: str) -> str:
@@ -137,11 +136,20 @@ class CloudLocalReadDraftPlan:
     def draft_generation_allowed(self) -> bool:
         return bool(self.items)
 
+    @property
+    def source_id(self) -> str:
+        return self.representability.review.history_collection.source_id
+
+    @property
+    def provider_id(self) -> str:
+        return self.representability.review.history_collection.provider_id
+
     def to_record(self) -> dict[str, Any]:
         return {
             "schema_version": CLOUD_LOCAL_READ_DRAFT_SCHEMA_VERSION,
             "authority": CLOUD_LOCAL_READ_DRAFT_AUTHORITY,
-            "source_id": CLOUD_LOCAL_READ_DRAFT_SOURCE,
+            "source_id": self.source_id,
+            "provider_id": self.provider_id,
             "read_only": True,
             "local_mapping": "candidate_not_proven",
             "local_mapping_proven": False,
@@ -240,7 +248,6 @@ def _draft_items(
 __all__ = [
     "CLOUD_LOCAL_READ_DRAFT_AUTHORITY",
     "CLOUD_LOCAL_READ_DRAFT_SCHEMA_VERSION",
-    "CLOUD_LOCAL_READ_DRAFT_SOURCE",
     "CloudLocalReadDraftItem",
     "CloudLocalReadDraftPlan",
     "build_cloud_local_read_draft_plan",
