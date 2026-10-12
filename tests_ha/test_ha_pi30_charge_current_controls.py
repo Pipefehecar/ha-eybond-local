@@ -34,6 +34,7 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
     inverter = await Pi30Driver().async_probe(transport, target)
     assert inverter is not None
     enriched_inverter = inverter
+    observed_values = dict(inverter.details)
     current_keys = {"max_charging_current", "max_ac_charging_current"}
     if deferred:
         inverter = replace(inverter, capabilities=tuple(
@@ -44,7 +45,7 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
         return RuntimeSnapshot(
             connected=True, inverter=inverter,
             collector=CollectorInfo(remote_ip=SYNTHETIC_COLLECTOR_IP, collector_pn=SYNTHETIC_COLLECTOR_PN),
-            values={**inverter.details, "runtime_detection_status": "autodetected_high_confidence"},
+            values={**observed_values, "runtime_detection_status": "autodetected_high_confidence"},
         )
 
     writes = []
@@ -53,7 +54,12 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
     async def write(self, key, value):
         assert allow_writes, "Setup, Full Control and reload must not send writes"
         writes.append((key, value))
-        return await Pi30Driver().async_write_capability(transport, inverter, key, value)
+        result = await Pi30Driver().async_write_capability(transport, inverter, key, value)
+        # This platform test simulates a fresh numeric device read after ACK.
+        # The real driver/hub readback sequence is covered in the unit suite.
+        cap = inverter.get_capability(key)
+        observed_values[key] = next(raw for raw, label in cap.enum_value_map.items() if label == value)
+        return result
 
     monkeypatch.setattr(FakeRuntimeManager, "async_refresh", refresh)
     monkeypatch.setattr(FakeRuntimeManager, "async_write_capability", write)
@@ -77,6 +83,12 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     registry = er.async_get(hass)
+    for key in current_keys:
+        sensor_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
+        assert sensor_id is not None
+        registry.async_update_entity(sensor_id, disabled_by=None)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
     if deferred:
         for key in current_keys:
             assert registry.async_get_entity_id(
@@ -98,6 +110,10 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
             assert await hass.config_entries.async_reload(entry.entry_id)
             await hass.async_block_till_done()
         for key, expected in (("max_charging_current", "50 A"), ("max_ac_charging_current", "10 A")):
+            sensor_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
+            sensor_state = hass.states.get(sensor_id)
+            assert sensor_state.state == expected.split()[0]
+            assert sensor_state.attributes["unit_of_measurement"] == "A"
             entity_id = registry.async_get_entity_id("select", DOMAIN, f"{entry.entry_id}_select_{key}")
             if mode != "full":
                 assert entity_id is None
@@ -118,6 +134,8 @@ async def test_advertised_currents_survive_setup_reload_without_writes(
                 await entry.runtime_data.async_refresh()
                 await hass.async_block_till_done()
                 assert hass.states.get(entity_id).state == option
+                sensor_id = registry.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{key}")
+                assert hass.states.get(sensor_id).state == option.split()[0]
         assert len(writes) == 4
         allow_writes = False
         key = "max_charging_current"

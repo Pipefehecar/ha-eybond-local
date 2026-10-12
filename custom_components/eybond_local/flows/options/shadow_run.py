@@ -117,6 +117,22 @@ def _metadata_with_local_coverage(
 class ShadowLearningRunMixin:
     """ShadowLearningRun lifecycle."""
 
+    async def _async_control_discovery_restore_pending(self, coordinator) -> bool:
+        """Resolve durable recovery before every wizard entry, including stale forms."""
+
+        blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
+        pending = (
+            callable(blocker)
+            and await blocker() == "shadow_learning_restore_pending"
+        ) or bool(getattr(coordinator, "shadow_learning_restore_pending", False))
+        if pending:
+            self._shadow_learning_state.pop("wizard_credentials", None)
+            self._shadow_learning_state.pop("wizard_consent", None)
+            self._shadow_learning_state["discovery"] = {
+                "status": "error", "reason": "shadow_learning_restore_pending",
+            }
+        return pending
+
     @staticmethod
     def _control_discovery_failure_reason(
         exc: Exception,
@@ -249,11 +265,7 @@ class ShadowLearningRunMixin:
                 ),
             )
 
-        start_blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
-        if callable(start_blocker) and await start_blocker():
-            self._shadow_learning_state["discovery"] = {
-                "status": "error", "reason": "shadow_learning_restore_pending",
-            }
+        if await self._async_control_discovery_restore_pending(coordinator):
             return await self.async_step_shadow_learning_result()
 
         readiness = self._support_acquisition_readiness()
@@ -337,6 +349,8 @@ class ShadowLearningRunMixin:
         """Choose one API source compatible with the selected product goal."""
 
         coordinator = self._coordinator()
+        if coordinator is not None and await self._async_control_discovery_restore_pending(coordinator):
+            return await self.async_step_shadow_learning_result()
         if coordinator is None or not self._control_discovery_learning_method(
             coordinator
         ):
@@ -430,6 +444,8 @@ class ShadowLearningRunMixin:
         """Consent to temporary routing, bounded cloud probes, and interception."""
 
         coordinator = self._coordinator()
+        if coordinator is not None and await self._async_control_discovery_restore_pending(coordinator):
+            return await self.async_step_shadow_learning_result()
         if coordinator is None:
             return await self.async_step_shadow_learning()
         engine = self._control_discovery_learning_engine(coordinator)
@@ -485,6 +501,8 @@ class ShadowLearningRunMixin:
         the config entry or its options.
         """
         coordinator = self._coordinator()
+        if coordinator is not None and await self._async_control_discovery_restore_pending(coordinator):
+            return await self.async_step_shadow_learning_result()
         engine = (
             self._control_discovery_learning_engine(coordinator)
             if coordinator is not None

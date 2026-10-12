@@ -90,8 +90,8 @@ class Pi30CapabilityAcquisitionTests(unittest.IsolatedAsyncioTestCase):
             for _ in range(4):
                 await driver.async_read_values(transport, inverter, runtime_state=state)
         self.assertEqual(transport.commands, ["QPIRI", "QMCHGCR", "QMUCHGCR"])
-        self.assertEqual(result.values["max_charging_current"], "50 A")
-        self.assertEqual(result.values["max_ac_charging_current"], "10 A")
+        self.assertEqual(result.values["max_charging_current"], 50)
+        self.assertEqual(result.values["max_ac_charging_current"], 10)
         self.assertEqual(result.diagnostics["pi30_charge_current_acquisition_status"], "complete")
         for cap in inverter.capabilities:
             if cap.key in CURRENT_KEYS:
@@ -104,10 +104,10 @@ class Pi30CapabilityAcquisitionTests(unittest.IsolatedAsyncioTestCase):
         inverter.details.update(max_charging_current=120, max_ac_charging_current="80 A")
         session = _session()
         values = await async_acquire_charge_current_controls(session, inverter, runtime_state={})
-        self.assertEqual(values, {"max_charging_current": "50 A", "max_ac_charging_current": "10 A"})
+        self.assertEqual(values, {"max_charging_current": 50, "max_ac_charging_current": 10})
         self.assertEqual([c.args[0] for c in session.request.await_args_list],
                          ["QPIRI", "QMCHGCR", "QMUCHGCR"])
-        self.assertEqual(inverter.details["max_charging_current"], "50 A")
+        self.assertEqual(inverter.details["max_charging_current"], 50)
 
     async def test_no_metadata_queries_when_required_telemetry_failed(self):
         for values in ({}, {"alarm_active": False}, {"energy_total": 123}):
@@ -189,7 +189,7 @@ class Pi30CapabilityAcquisitionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(asyncio.get_running_loop(), real_loop)
         self.assertEqual(calls, ["QPIRI", "QMCHGCR", "QMUCHGCR"])
         self.assertGreater(timeouts[-1], 0.7)
-        self.assertEqual(values, {"max_ac_charging_current": "10 A"})
+        self.assertEqual(values, {"max_ac_charging_current": 10})
         calls.clear()
         session = _session()
         await async_acquire_charge_current_controls(session, inverter, runtime_state=state)
@@ -284,7 +284,7 @@ class Pi30CapabilityAcquisitionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([(command, status) for command, _ms, status in timings],
                                  [("QPIRI", "ok"), ("QMCHGCR", outcome), ("QMUCHGCR", "ok")])
                 self.assertTrue(all(ms >= 0 for _command, ms, _status in timings))
-                self.assertEqual(result, {"max_ac_charging_current": "10 A"})
+                self.assertEqual(result, {"max_ac_charging_current": 10})
 
     async def test_combined_timeline_includes_metadata_cost_without_polluting_telemetry(self):
         class SlowMetadata(_Transport):

@@ -384,6 +384,11 @@ def _write_readback_matches(
     if readback_value == written_value or readback_value == requested_value:
         return True
 
+    if type(readback_value) is int and capability.enum_value_map:
+        label = capability.enum_value_map.get(readback_value)
+        if label is not None and label in (requested_value, written_value):
+            return True
+
     if capability.enum_value_map and isinstance(requested_value, int):
         expected_label = capability.enum_value_map.get(requested_value)
         if expected_label is not None and readback_value == expected_label:

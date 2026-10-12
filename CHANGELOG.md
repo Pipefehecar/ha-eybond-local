@@ -104,6 +104,15 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- PI30 charging-current sensors retain numeric ampere values while selects show
+  their labelled choices. Accepted built-in setting writes request fresh QPIRI
+  or QFLAG readback instead of relying on cached settings; missing or unchanged
+  readback remains an explicit failure, without resending the write.
+- Cloud-learning recovery takes priority at the support menu and every wizard
+  entry, including stale consent screens and a freshly loaded recovery record.
+- Options explain how to reconfigure older entries with no saved collector
+  identity, without deleting the entry or guessing its transport from its IP.
+
 - Shared SMG battery-voltage templates no longer impose guessed 48 V limits on
   24 V inverters. Removed the earlier arbitrary 0–70 V workarounds as well.
   Explicit profile limits remain enforced; missing limits use only the scaled

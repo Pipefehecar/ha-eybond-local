@@ -105,7 +105,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(caps[key].provenance, "doc_backed")
         self.assertEqual(list(caps["max_charging_current"].enum_value_map), list(range(10, 111, 10)))
         self.assertEqual(list(caps["max_ac_charging_current"].enum_value_map), [2, *range(10, 81, 10)])
-        self.assertEqual(inverter.details["max_charging_current"], "50 A")
+        self.assertEqual(inverter.details["max_charging_current"], 50)
         self.assertTrue(all(command.startswith("Q") for command in transport.commands))
         self.assertEqual(await driver.async_write_capability(
             transport, inverter, "max_charging_current", "40 A",
@@ -743,7 +743,8 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(written, "Utility first")
-        self.assertEqual(inverter.details["output_source_priority"], "Utility first")
+        # An ACK must not optimistically replace the last observed setting.
+        self.assertEqual(inverter.details["output_source_priority"], "SBU first")
         self.assertIn("POP00", transport.commands)
 
     async def test_write_bool_capability_sends_enable_disable_command(self) -> None:
@@ -791,7 +792,7 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(written, 27.2)
-        self.assertEqual(inverter.details["battery_float_voltage"], 27.2)
+        self.assertEqual(inverter.details["battery_float_voltage"], 27.0)
         self.assertIn("PBFT27.2", transport.commands)
 
     async def test_pi30_max_exposes_and_writes_charge_current_controls(self) -> None:
@@ -811,8 +812,8 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
 
         assert inverter is not None
         self.assertEqual(inverter.variant_key, "vmii_nxpw5kw")
-        self.assertEqual(inverter.details["max_charging_current"], "100 A")
-        self.assertEqual(inverter.details["max_ac_charging_current"], "70 A")
+        self.assertEqual(inverter.details["max_charging_current"], 100)
+        self.assertEqual(inverter.details["max_ac_charging_current"], 70)
         capability_keys = {item.key for item in inverter.capabilities}
         self.assertIn("max_charging_current", capability_keys)
         self.assertIn("max_ac_charging_current", capability_keys)

@@ -145,7 +145,7 @@ async def async_acquire_charge_current_controls(
         if not is_current():
             return {}
         values = {
-            cap.value_key: cap.enum_value_map[current[cap.value_key]]
+            cap.value_key: current[cap.value_key]
             for cap in enriched if cap.key not in existing
         }
         inverter.capabilities = enriched

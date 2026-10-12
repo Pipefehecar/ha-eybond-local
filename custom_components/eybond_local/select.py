@@ -249,6 +249,8 @@ class EybondCapabilitySelect(CoordinatorEntity[EybondLocalCoordinator], SelectEn
     @property
     def current_option(self) -> str | None:
         value = self.coordinator.data.runtime_value(self._capability.value_key)
+        if type(value) is int:
+            return self._capability.enum_value_map.get(value)
         return value if isinstance(value, str) else None
 
     @property

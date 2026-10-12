@@ -120,6 +120,12 @@ controls are unchanged. A readable buzzer/backlight state does not guarantee
 that the inverter accepts its enable/disable command; a `NAK` is a rejection,
 not a successful change.
 
+Current sensors keep numeric ampere readings; the corresponding controls show
+choices such as **10 A**. After an accepted setting command, the integration
+reads the relevant configuration again. An acknowledgement alone is not proof
+that the setting changed: an old value or missing readback is reported as
+unconfirmed. Confirmation may read twice, but does not resend the setting.
+
 ## MUST PV/PH18 power and energy corrections
 
 The unreleased test build corrects several readings in the MUST PV/PH18 map:

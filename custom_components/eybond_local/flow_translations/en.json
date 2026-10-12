@@ -293,6 +293,7 @@
       "collector_uart_refresh_done": "Collector UART status has been refreshed.",
       "collector_uart_apply_done": "The collector accepted the new UART speed.",
       "collector_uart_runtime_unavailable_note": "\n\nThis collector reports BK72xx/LibreTiny hardware. Runtime UART speed switching is not available on this platform. Change `baud_rate:` in the ESPHome YAML and reflash the collector.",
+      "collector_identity_repair_note": "\n\nThis older entry has no saved collector identity. Close this dialog and choose Reconfigure from the integration entry's menu to confirm the collector. Keep the existing entry; changing the inverter driver or running Full scan does not repair this binding.",
       "collector_virtual_bridge_note": "\n\nThis collector is a local ESP EyeBond Collector bridge with no vendor-cloud side. Cloud-only actions are hidden; its Home Assistant address, Wi-Fi, UART, and runtime settings remain available.",
       "collector_wifi_last_action_line": "**Last action:** {value}",
       "collector_wifi_last_error_line": "**Last error:** {value}",

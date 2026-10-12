@@ -182,6 +182,61 @@ _PI30_SUPPORT_PROBE_COMMANDS: tuple[str, ...] = (
 )
 
 _PI30_SERIAL_QUERY_TIMEOUT = 4.0
+
+
+@dataclass(slots=True)
+class _PendingSettingReadback:
+    """Two fresh reads for the hub's two confirmation passes, never a write retry."""
+
+    inverter: DetectedInverter
+    capability: WriteCapability
+    command: str
+    remaining: int = 2
+
+
+_SETTING_READBACK_KEY = "pi30_setting_readback"
+
+
+async def _async_read_pending_setting(session, inverter, runtime_state):
+    pending = (runtime_state or {}).get(_SETTING_READBACK_KEY)
+    if not isinstance(pending, _PendingSettingReadback):
+        return {}, frozenset(), {}
+    if pending.inverter is not inverter or pending.capability not in inverter.capabilities:
+        runtime_state.pop(_SETTING_READBACK_KEY, None)
+        return {}, frozenset(), {}
+    pending.remaining -= 1
+    parser = parse_qflag if pending.command == "QFLAG" else parse_qpiri
+    started = time.monotonic()
+    outcome = "ok"
+    values = {}
+    try:
+        values = parser(await asyncio.wait_for(session.request(pending.command), timeout=3.0))
+        values.update(_translate_config_enums(values, _schema_for_inverter(inverter, "pi30_ascii.json")))
+        _translate_capability_enum_values(values, inverter.capabilities)
+    except asyncio.CancelledError:
+        if runtime_state.get(_SETTING_READBACK_KEY) is pending:
+            runtime_state.pop(_SETTING_READBACK_KEY, None)
+        raise
+    except Exception:
+        outcome = "error"
+    finally:
+        current = (
+            runtime_state.get(_SETTING_READBACK_KEY) is pending
+            and pending.capability in inverter.capabilities
+        )
+        if pending.remaining <= 0 and runtime_state.get(_SETTING_READBACK_KEY) is pending:
+            runtime_state.pop(_SETTING_READBACK_KEY, None)
+    # A reset or a rebind while awaiting I/O cannot publish old evidence.
+    if not current:
+        return {}, frozenset(), {}
+    missing = frozenset({pending.capability.value_key}) - values.keys()
+    return values, frozenset(missing), {
+        "pi30_setting_readback_command": pending.command,
+        "pi30_setting_readback_outcome": outcome if not missing else "unavailable",
+        "pi30_setting_readback_duration_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
 class Pi30Driver(InverterDriver):
     """PI30 probe, runtime reader, and command-based controller."""
 
@@ -378,6 +433,14 @@ class Pi30Driver(InverterDriver):
             values.update(await async_acquire_charge_current_controls(
                 session, inverter, runtime_state=runtime_state, command_timings=metadata_timings,
             ))
+        setting_values, setting_removed, setting_diagnostics = await _async_read_pending_setting(
+            session, inverter, runtime_state,
+        )
+        values.update(setting_values)
+        removed_keys = frozenset(removed_keys) | setting_removed
+        for key in setting_removed:
+            values.pop(key, None)
+        diagnostics.update(setting_diagnostics)
         diagnostics.update(charge_current_acquisition_diagnostics(runtime_state))
         # The recurring telemetry estimate must not learn the cost of finite
         # acquisition. Expose both phases plus their actual combined timeline.
@@ -467,9 +530,19 @@ class Pi30Driver(InverterDriver):
             raise RuntimeError(f"unexpected_write_response:{capability.key}:{response}")
 
         written_value = _decode_capability_value(capability, raw_value)
-        inverter.details[capability.value_key] = written_value
-        if capability.key != capability.value_key:
-            inverter.details[capability.key] = written_value
+        # ACK is not readback. Normal telemetry does not query QPIRI/QFLAG;
+        # schedule fresh setting reads instead of mutating cached identity.
+        read_command = (
+            "QFLAG" if capability.key in _PI30_BOOL_COMMANDS else
+            "QPIRI" if capability.key in (
+                *_PI30_ENUM_COMMANDS, *_PI30_NUMERIC_COMMANDS,
+                "max_charging_current", "max_ac_charging_current",
+            ) else ""
+        )
+        if runtime_state is not None and read_command:
+            runtime_state[_SETTING_READBACK_KEY] = _PendingSettingReadback(
+                inverter, capability, read_command,
+            )
         return written_value
 
     async def async_capture_support_evidence(self, transport, inverter: DetectedInverter) -> dict[str, Any]:
@@ -1451,10 +1524,16 @@ def _translate_capability_enum_values(
     values: dict[str, Any],
     capabilities: tuple[WriteCapability, ...],
 ) -> None:
-    """Translate QPIRI numeric settings into their select labels."""
+    """Translate categorical settings; keep physical quantities numeric.
+
+    A current sensor and a select share the same value. Only the select's UI
+    converts an ampere value to its choice label, not the telemetry producer.
+    """
 
     for capability in capabilities:
         if capability.value_kind != "enum" or not capability.enum_value_map:
+            continue
+        if capability.unit:
             continue
         current = values.get(capability.value_key)
         if not isinstance(current, int) or isinstance(current, bool):

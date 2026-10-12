@@ -293,6 +293,11 @@ an older learned control with the corrected command type.
 If Home Assistant says it could not confirm restoration of the collector
 connection, open **Configure → Expand device support → Analyze cloud data and
 device capabilities** and choose **Retry restoring the collector connection**.
+With a saved pending recovery, opening **Expand device support** takes you to
+that recovery screen, even after reopening Home Assistant. An already-open
+learning form also checks recovery before proceeding. If you instead see only
+new-learning consent, do not start it to try to recover: share a screenshot and
+a fresh Support Archive so the saved state can be checked.
 Home Assistant checks the collector's current connection settings first. If
 the saved endpoint is already restored and applied, it does not rewrite it or
 restart the collector. If settings still need applying, it completes that step

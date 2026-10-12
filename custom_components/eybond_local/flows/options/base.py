@@ -25,6 +25,7 @@ from ...support.acquisition import (
 )
 from ...support.cloud_evidence_providers import cloud_evidence_provider_supported
 from ...connection.ui import ConnectionFormField
+from ...connection.connection_policy import collector_identity_binding_required
 from ..common.connection_form import (
     IP_TEXT_SELECTOR as _IP_TEXT_SELECTOR,
 )
@@ -410,6 +411,15 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
         if marker_present:
             menu_options.insert(0, "strategy_transition_repair")
 
+        if collector_identity_binding_required(self._config_entry.data, self._config_entry.options):
+            bridge_note += self._tr(
+                "common.dynamic.collector_identity_repair_note",
+                "\n\nThis older entry has no saved collector identity. Close this dialog "
+                "and choose Reconfigure from the integration entry's menu to confirm "
+                "the collector. Keep the existing entry; changing the inverter driver "
+                "or running Full scan does not repair this binding.",
+            )
+
         if len(self._runtime_inverter_protocol_candidates()) > 1:
             menu_options.insert(0 if not marker_present else 1, "inverter_protocol")
 
@@ -442,6 +452,8 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
                     "Ensure the entry is loaded, then try again.",
                 ),
             )
+        if await self._async_control_discovery_restore_pending(coordinator):
+            return await self.async_step_shadow_learning_result()
         if not self._cloud_tools_menu_available(coordinator):
             return await self._async_cloud_tools_unavailable()
 

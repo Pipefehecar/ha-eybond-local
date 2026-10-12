@@ -74,6 +74,19 @@ async def start_repair(hass, entry):
     return await hass.config_entries.flow.async_configure(first["flow_id"], settings())
 
 
+async def test_pnless_entry_options_explain_reconfigure_without_io(hass, pending_entry):
+    identity = AsyncMock()
+    before = dict(pending_entry.data)
+    with patch(TX, identity):
+        result = await hass.config_entries.options.async_init(pending_entry.entry_id)
+        note = result["description_placeholders"]["bridge_note"]
+        assert "Reconfigure" in note
+        assert "no saved collector identity" in note
+        identity.assert_not_awaited()
+    assert pending_entry.data == before
+    hass.config_entries.options.async_abort(result["flow_id"])
+
+
 @pytest.mark.parametrize("interface_present", [True, False])
 async def test_repair_preserves_available_saved_interface(hass, interface_present):
     """Repair must not silently advertise the host's default-route interface."""

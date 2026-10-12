@@ -149,6 +149,11 @@ These are setup routes. The normal product choice after setup is shown as
 
 ## Repairing an older unidentified entry
 
+An older entry may have worked without storing the collector's identity. After
+updating, TCP connections alone cannot bind it safely to the integration. The
+options dialog explains when this repair is needed. Full scan, Full Control,
+or forcing an inverter driver cannot replace collector identity confirmation.
+
 If an older installation still shows **EyeBond Setup Pending** or reports that
 the collector identity needs verification, keep the entry. Open its three-dot
 menu under **Devices & Services → EyeBond Local** and choose **Reconfigure**.

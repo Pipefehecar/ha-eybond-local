@@ -948,9 +948,7 @@ class ShadowLearningReviewMixin:
         # error_detail falls back to the last status line, which on success holds
         # the success message — OR-ing it in here turned a successful-but-empty
         # run into a failure screen that printed the success text as the error.
-        restore_pending = bool(
-            getattr(coordinator, "shadow_learning_restore_pending", False)
-        )
+        restore_pending = await self._async_control_discovery_restore_pending(coordinator)
         if restore_pending:
             self._shadow_learning_state["discovery"] = {
                 "status": "error", "reason": "shadow_learning_restore_pending",

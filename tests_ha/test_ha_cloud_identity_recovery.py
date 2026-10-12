@@ -86,8 +86,12 @@ async def test_local_redirect_does_not_change_cloud_api_picker(
 
 
 @pytest.mark.parametrize("status", ["restoring", "restore_failed"])
+@pytest.mark.parametrize("entry_step", [
+    "cloud_tools", "shadow_learning", "shadow_learning_source",
+    "shadow_learning_consent", "shadow_learning_credentials", "shadow_learning_result",
+])
 async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
-    hass, collector_entry, fake_runtime, monkeypatch, status,
+    hass, collector_entry, fake_runtime, monkeypatch, status, entry_step,
 ):
     hass.config_entries.async_update_entry(collector_entry, data={
         **collector_entry.data,
@@ -129,8 +133,17 @@ async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
         write.assert_not_awaited()
         capture.assert_not_awaited()
         flow = hass.config_entries.options._progress[first["flow_id"]]
-        result = await flow.async_step_shadow_learning()
+        # Cold coordinator/deep-linked or stale wizard step: durable recovery
+        # must win over an old consent and must not depend on snapshot values.
+        coordinator._cached_shadow_learning_session_state = None
+        coordinator._shadow_learning_session_state_loaded = False
+        flow._shadow_learning_state.update(wizard_consent=True, wizard_credentials={"username": "synthetic"})
+        result = await getattr(flow, f"async_step_{entry_step}")()
         assert result["step_id"] == "shadow_learning_result"
+        assert "wizard_credentials" not in flow._shadow_learning_state
+        assert "wizard_consent" not in flow._shadow_learning_state
+        write.assert_not_awaited()
+        capture.assert_not_awaited()
         actions = result["data_schema"].schema["result_action"].config["options"]
         assert [item["value"] for item in actions] == ["restore_connection", "create_support_package", "done"]
         result = await flow.async_step_shadow_learning_result({"result_action": "restore_connection"})
