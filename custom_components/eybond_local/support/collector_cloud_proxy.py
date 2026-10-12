@@ -320,15 +320,74 @@ def build_restore_at_commands(
     return commands
 
 
+async def _await_completion(operation: Awaitable[None]) -> None:
+    """Defer even repeated caller cancellation until owned cleanup/I/O finishes."""
+
+    task = asyncio.ensure_future(operation)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+        except Exception:
+            break
+    try:
+        task.result()
+    finally:
+        if cancelled:
+            raise asyncio.CancelledError
+
+
+async def _cancel_and_drain(tasks: tuple[asyncio.Task[None], ...]) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _close_writers(*writers: asyncio.StreamWriter) -> None:
+    for writer in writers:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
 class JsonLineWriter:
     def __init__(self, output: TextIO) -> None:
         self._output = output
         self._lock = asyncio.Lock()
+        self._closed = False
 
     async def write(self, payload: dict[str, object]) -> None:
         line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         async with self._lock:
-            await asyncio.to_thread(self._write_line, line)
+            if self._closed:
+                raise RuntimeError("proxy_trace_closed")
+            # Cancelling to_thread does not stop its worker. Keep the lock and
+            # ownership until the actual write/flush completes, then re-raise.
+            await _await_completion(asyncio.to_thread(self._write_line, line))
+
+    async def close(
+        self, closer: Callable[[TextIO], Awaitable[None]] | None = None
+    ) -> None:
+        """Close once, serialized behind writes and immune to interrupted waits."""
+
+        async def finish() -> None:
+            async with self._lock:
+                if self._closed:
+                    return
+                self._closed = True
+                if closer is None:
+                    await asyncio.to_thread(self._output.close)
+                else:
+                    await closer(self._output)
+
+        await _await_completion(finish())
 
     def _write_line(self, line: str) -> None:
         self._output.write(line + "\n")
@@ -550,39 +609,34 @@ async def _pipe(
         exit_reason = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        await frame_writer.write(
-            {
-                "kind": "pipe_ended",
-                "timestamp": _utc_timestamp(),
-                "direction": direction,
-                "remote": remote,
-                "reason": exit_reason,
-            }
-        )
-        await extractor.flush_tail()
-        if chunk_filter is not None:
-            tail = chunk_filter.flush()
-            if tail:
-                writer.write(tail)
-                await writer.drain()
-        if close_writer_on_exit:
+        async def finish() -> None:
             try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
+                await frame_writer.write(
+                    {
+                        "kind": "pipe_ended",
+                        "timestamp": _utc_timestamp(),
+                        "direction": direction,
+                        "remote": remote,
+                        "reason": exit_reason,
+                    }
+                )
+                await extractor.flush_tail()
+                if chunk_filter is not None:
+                    tail = chunk_filter.flush()
+                    if tail:
+                        writer.write(tail)
+                        await writer.drain()
+            finally:
+                if close_writer_on_exit:
+                    await _close_writers(writer)
+
+        await _await_completion(finish())
 
 
 async def _cancel_task(task: asyncio.Task[None] | None) -> None:
     if task is None:
         return
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    except Exception:
-        pass
+    await _await_completion(_cancel_and_drain((task,)))
 
 
 async def _drain_reader(
@@ -849,15 +903,22 @@ async def _handle_client(
     client_port = client_peer[1] or 0
     remote_label = f"{client_ip}:{client_port}"
 
-    await frame_writer.write(
-        {
-            "kind": "connect",
-            "timestamp": _utc_timestamp(),
-            "client": remote_label,
-            "upstream_host": upstream_host,
-            "upstream_port": upstream_port,
-        }
-    )
+    try:
+        await frame_writer.write(
+            {
+                "kind": "connect",
+                "timestamp": _utc_timestamp(),
+                "client": remote_label,
+                "upstream_host": upstream_host,
+                "upstream_port": upstream_port,
+            }
+        )
+    except BaseException:
+        writers = (client_writer,)
+        if upstream_connection is not None:
+            writers += (upstream_connection[1],)
+        await _await_completion(_close_writers(*writers))
+        raise
 
     try:
         if upstream_connection is None:
@@ -867,19 +928,22 @@ async def _handle_client(
             )
         else:
             upstream_reader, upstream_writer = upstream_connection
-    except Exception as exc:
-        await frame_writer.write(
-            {
-                "kind": "upstream_connect_error",
-                "timestamp": _utc_timestamp(),
-                "client": remote_label,
-                "upstream_host": upstream_host,
-                "upstream_port": upstream_port,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        )
-        client_writer.close()
-        await client_writer.wait_closed()
+    except BaseException as exc:
+        try:
+            if not isinstance(exc, Exception):
+                raise
+            await frame_writer.write(
+                {
+                    "kind": "upstream_connect_error",
+                    "timestamp": _utc_timestamp(),
+                    "client": remote_label,
+                    "upstream_host": upstream_host,
+                    "upstream_port": upstream_port,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        finally:
+            await _await_completion(_close_writers(client_writer))
         return
 
     observed = SessionObservation(collector=ObservedCollectorAddress())
@@ -921,7 +985,7 @@ async def _handle_client(
         cloud_data_buffer.extend(chunk)
         while cloud_data_buffer:
             try:
-                message = consume_cloud_message(cloud_data_buffer)
+                message = consume_cloud_message(cloud_data_buffer, allow_pi30=True)
             except Exception:
                 # Observation must never alter the byte-transparent relay.
                 cloud_data_buffer.clear()
@@ -1017,6 +1081,8 @@ async def _handle_client(
             if done:
                 for task in pending:
                     await _cancel_task(task)
+                for task in done:
+                    task.result()
             else:
                 await frame_writer.write(
                     {
@@ -1043,23 +1109,22 @@ async def _handle_client(
                     at_followup_command=restore_at_followup,
                 )
     finally:
-        await frame_writer.write(
-            {
-                "kind": "disconnect",
-                "timestamp": _utc_timestamp(),
-                "client": remote_label,
-            }
-        )
-        try:
-            client_writer.close()
-            await client_writer.wait_closed()
-        except Exception:
-            pass
-        try:
-            upstream_writer.close()
-            await upstream_writer.wait_closed()
-        except Exception:
-            pass
+        async def finish() -> None:
+            # asyncio.wait does not own/cancel its children. No connection may
+            # return (and let its trace close) while either pipe still uses it.
+            try:
+                await _cancel_and_drain((collector_task, cloud_task))
+                await frame_writer.write(
+                    {
+                        "kind": "disconnect",
+                        "timestamp": _utc_timestamp(),
+                        "client": remote_label,
+                    }
+                )
+            finally:
+                await _close_writers(client_writer, upstream_writer)
+
+        await _await_completion(finish())
 
 
 async def _handle_passive_client(
@@ -1080,19 +1145,19 @@ async def _handle_passive_client(
     client_port = client_peer[1] or 0
     remote_label = f"{client_ip}:{client_port}"
 
-    await frame_writer.write(
-        {
-            "kind": "passive_connect",
-            "timestamp": _utc_timestamp(),
-            "client": remote_label,
-        }
-    )
     extractor = FrameExtractor(
         direction="collector_to_local",
         remote=remote_label,
         writer=frame_writer,
     )
     try:
+        await frame_writer.write(
+            {
+                "kind": "passive_connect",
+                "timestamp": _utc_timestamp(),
+                "client": remote_label,
+            }
+        )
         while True:
             chunk = await client_reader.read(4096)
             if not chunk:
@@ -1110,19 +1175,20 @@ async def _handle_passive_client(
             )
             await extractor.feed(chunk)
     finally:
-        await extractor.flush_tail()
-        await frame_writer.write(
-            {
-                "kind": "passive_disconnect",
-                "timestamp": _utc_timestamp(),
-                "client": remote_label,
-            }
-        )
-        try:
-            client_writer.close()
-            await client_writer.wait_closed()
-        except Exception:
-            pass
+        async def finish() -> None:
+            try:
+                await extractor.flush_tail()
+                await frame_writer.write(
+                    {
+                        "kind": "passive_disconnect",
+                        "timestamp": _utc_timestamp(),
+                        "client": remote_label,
+                    }
+                )
+            finally:
+                await _close_writers(client_writer)
+
+        await _await_completion(finish())
 
 
 async def handle_proxy_client(
@@ -1186,26 +1252,32 @@ async def _run(args: argparse.Namespace) -> int:
         if not args.advertise_host:
             raise SystemExit("--advertise-host is required with --announce-collector")
 
-    server = await asyncio.start_server(
-        (
-            (lambda reader, writer: _handle_passive_client(
-                reader,
-                writer,
-                frame_writer=frame_writer,
-            ))
+    clients: set[asyncio.Task[None]] = set()
+
+    def accept_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        operation = (
+            _handle_passive_client(reader, writer, frame_writer=frame_writer)
             if no_upstream
-            else (lambda reader, writer: _handle_client(
-                reader,
-                writer,
-                upstream_host=args.upstream_host,
-                upstream_port=args.upstream_port,
-                frame_writer=frame_writer,
-                restore_target=restore_target,
-                restore_after=args.restore_after,
+            else _handle_client(
+                reader, writer, upstream_host=args.upstream_host,
+                upstream_port=args.upstream_port, frame_writer=frame_writer,
+                restore_target=restore_target, restore_after=args.restore_after,
                 restore_at_followup=args.restore_at_followup,
                 restore_trigger_file=Path(args.restore_trigger_file) if args.restore_trigger_file else None,
-            ))
-        ),
+            )
+        )
+        task = asyncio.create_task(operation)
+        clients.add(task)
+
+        def finished(task: asyncio.Task[None]) -> None:
+            clients.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                LOGGER.error("Proxy client failed", exc_info=task.exception())
+
+        task.add_done_callback(finished)
+
+    server = await asyncio.start_server(
+        accept_client,
         args.listen_host,
         args.listen_port,
     )
@@ -1245,20 +1317,26 @@ async def _run(args: argparse.Namespace) -> int:
             async with server:
                 await server.serve_forever()
     finally:
-        if announcer is not None:
-            await announcer.stop()
-            await frame_writer.write(
-                {
-                    "kind": "passive_discovery_stopped",
-                    "timestamp": _utc_timestamp(),
-                    "last_reply": announcer.last_reply,
-                    "last_reply_from": announcer.last_reply_from,
-                }
-            )
-        server.close()
-        await server.wait_closed()
-        if close_output:
-            output_handle.close()
+        async def finish() -> None:
+            server.close()
+            try:
+                await _cancel_and_drain(tuple(clients))
+                await server.wait_closed()
+                if announcer is not None:
+                    await announcer.stop()
+                    await frame_writer.write(
+                        {
+                            "kind": "passive_discovery_stopped",
+                            "timestamp": _utc_timestamp(),
+                            "last_reply": announcer.last_reply,
+                            "last_reply_from": announcer.last_reply_from,
+                        }
+                    )
+            finally:
+                if close_output:
+                    await frame_writer.close()
+
+        await _await_completion(finish())
     return 0
 
 

@@ -133,6 +133,14 @@ collector/cloud handshake. Baseline sessions and sockets whose observed wire
 shape cannot belong to the transparent route remain available to their normal
 owners. Unregistering the lease releases this reservation.
 
+Capture shutdown owns the complete producer tree: both relay directions must
+finish before the recording sink closes. Cancellation of a coroutine awaiting
+an executor write does not stop the worker, so the trace writer retains its lock
+until that write/flush actually completes. Closing the trace is serialized with
+writes, and repeated cancellation cannot interrupt the mandatory drain. Trace
+errors must not bypass socket cleanup. These lifetime guarantees do not certify
+endpoint restoration, which still requires the separate live management check.
+
 Temporary proxy/shadow startup does not own the primary callback listener's
 health state. A failed auxiliary bind, upstream connection, or cancelled startup
 must release the temporary handler/route/lease and propagate the error to the

@@ -1871,15 +1871,35 @@ class CoordinatorCloudToolsMixin:
             )
 
     async def _async_wait_for_proxy_capture_reconnect(self, trace_path: Path) -> None:
-        deadline = asyncio.get_running_loop().time() + 75.0
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = started + 75.0
         identity_verified = False
-        while asyncio.get_running_loop().time() < deadline:
+        last_progress = None
+        next_progress_at = started
+        status: dict[str, object] = {}
+        while loop.time() < deadline:
             if not self._proxy_capture_process_running():
                 raise RuntimeError("proxy_capture_route_stopped")
             status = await self.hass.async_add_executor_job(
                 lambda: inspect_proxy_capture_start_status(trace_path)
             )
             upstream_error = str(status.get("upstream_error") or "")
+            progress = (
+                bool(status.get("connected")),
+                bool(status.get("identity_verified")),
+                bool(status.get("operational_activity")),
+                bool(upstream_error),
+            )
+            now = loop.time()
+            if progress != last_progress or now >= next_progress_at:
+                logger.debug(
+                    "Proxy capture startup entry=%s elapsed=%.1fs connected=%s "
+                    "identity_verified=%s operational_activity=%s upstream_error=%s",
+                    self.config_entry.entry_id, now - started, *progress,
+                )
+                last_progress = progress
+                next_progress_at = now + 15.0
             if upstream_error:
                 raise RuntimeError(f"proxy_capture_upstream_connect_failed:{upstream_error}")
             if status.get("identity_mismatch"):
@@ -1892,6 +1912,14 @@ class CoordinatorCloudToolsMixin:
             ):
                 return
             await asyncio.sleep(1.0)
+        logger.warning(
+            "Proxy capture startup timed out entry=%s elapsed=%.1fs connected=%s "
+            "identity_verified=%s operational_activity=%s upstream_error=%s",
+            self.config_entry.entry_id, loop.time() - started,
+            bool(status.get("connected")), identity_verified,
+            bool(status.get("operational_activity")),
+            bool(status.get("upstream_error")),
+        )
         if identity_verified:
             raise TimeoutError("proxy_capture_cloud_session_not_ready")
         raise TimeoutError("proxy_capture_collector_identity_timeout")

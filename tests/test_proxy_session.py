@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, Mock, patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,41 @@ from custom_components.eybond_local.support.collector_cloud_proxy import (  # no
     JsonLineWriter,
     handle_proxy_client,
 )
+from custom_components.eybond_local.payload.pi30 import (  # noqa: E402
+    build_request as build_pi30_request, parse_response as parse_pi30_response,
+)
+
+
+class _MemoryRelayWriter:
+    """Only external device/cloud IO is fake; the production relay runs."""
+
+    def __init__(self):
+        self.data = bytearray()
+        self.written = asyncio.Event()
+
+    def write(self, data):
+        self.data.extend(data)
+        self.written.set()
+
+    async def drain(self):
+        pass
+
+    def close(self):
+        pass
+
+    async def wait_closed(self):
+        pass
+
+    def get_extra_info(self, name):
+        return ("192.0.2.10", 12345)
+
+    async def wait_for_bytes(self, expected):
+        async def wait():
+            while len(self.data) < len(expected):
+                self.written.clear()
+                await self.written.wait()
+            assert bytes(self.data) == expected
+        await asyncio.wait_for(wait(), timeout=2)
 
 
 class ProxySessionTests(unittest.TestCase):
@@ -232,6 +269,108 @@ class ProxySessionTests(unittest.TestCase):
 
 
 class TransparentCloudRelayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shadow_cloud_pi30_write_does_not_opt_in_or_reach_collector(self):
+        from custom_components.eybond_local.support.shadow_learning import proxy as shadow_proxy
+        from test_shadow_learning_proxy import _seed
+
+        # Reuse the established shadow fixture, changing only external IO.
+        # Framing a transparent capture must not opt the shadow into a carrier.
+        collector, cloud = asyncio.StreamReader(), asyncio.StreamReader()
+        to_collector, to_cloud = _MemoryRelayWriter(), _MemoryRelayWriter()
+        parsed = asyncio.Event()
+        parser = shadow_proxy.consume_cloud_message
+        parser_options = []
+
+        def observe(buffer, **kwargs):
+            parser_options.append(kwargs)
+            result = parser(buffer, **kwargs)
+            parsed.set()
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            handler = shadow_proxy.InProcessFailClosedShadowProxyHandler(
+                upstream_host="unused.invalid", upstream_port=18899, seed=_seed(),
+                output_path=Path(tmp) / "shadow.jsonl")
+            await handler.start()
+            with patch.object(shadow_proxy.asyncio, "open_connection",
+                              AsyncMock(return_value=(cloud, to_cloud))), \
+                    patch.object(shadow_proxy, "consume_cloud_message", side_effect=observe):
+                task = asyncio.create_task(handler.handle_client(collector, to_collector))
+                try:
+                    cloud.feed_data(build_pi30_request("POP02"))
+                    await asyncio.wait_for(parsed.wait(), timeout=2)
+                finally:
+                    collector.feed_eof()
+                    cloud.feed_eof()
+                    await asyncio.wait_for(task, timeout=2)
+                    await handler.stop()
+        self.assertEqual(parser_options, [{}])
+        self.assertEqual(to_collector.data, b"")
+        self.assertEqual(handler.backend.write_observations, ())
+
+    async def _raw_pi30_exchange(self, request_chunks):
+        collector, cloud = asyncio.StreamReader(), asyncio.StreamReader()
+        to_collector, to_cloud = _MemoryRelayWriter(), _MemoryRelayWriter()
+        output = io.StringIO()
+        expected_pn = "I30000200000000001"
+        identity = f"AT+DTUPN:{expected_pn}\r\n".encode("ascii")
+        response = build_pi30_request("(230.0 50.0 230.0 50.0 1000 0900 020 400 52.00")
+        self.assertTrue(parse_pi30_response(response).startswith("230.0"))
+        task = asyncio.create_task(handle_proxy_client(
+            collector, to_collector, upstream_host="unused.invalid", upstream_port=18899,
+            frame_writer=JsonLineWriter(output), restore_target=None, restore_after=0,
+            restore_at_followup="", restore_trigger_file=None,
+            expected_collector_pn=expected_pn, upstream_connection=(cloud, to_cloud)))
+        try:
+            cloud.feed_data(b"AT+DTUPN?\r\n")
+            await to_collector.wait_for_bytes(b"AT+DTUPN?\r\n")
+            collector.feed_data(identity)
+            await to_cloud.wait_for_bytes(identity)
+            forwarded = b"AT+DTUPN?\r\n"
+            for chunk in request_chunks:
+                cloud.feed_data(chunk)
+                forwarded += chunk
+                await to_collector.wait_for_bytes(forwarded)
+            # The captured cloud shape may coalesce another AT query with the
+            # raw poll. Metadata reply alone must still not count as readiness.
+            metadata_reply = b""
+            if b"AT+WFSS?\r\n" in b"".join(request_chunks):
+                metadata_reply = b"AT+WFSS:-50\r\n"
+                collector.feed_data(metadata_reply)
+                await to_cloud.wait_for_bytes(identity + metadata_reply)
+            collector.feed_data(response)
+            await to_cloud.wait_for_bytes(identity + metadata_reply + response)
+        finally:
+            collector.feed_eof()
+            cloud.feed_eof()
+            await asyncio.wait_for(task, timeout=2)
+        trace_path = Mock()
+        trace_path.exists.return_value = True
+        trace_path.open.return_value = io.StringIO(output.getvalue())
+        return inspect_proxy_capture_start_status(trace_path)
+
+    async def test_raw_pi30_crc_valid_exchange_is_operational_at_every_request_split(self):
+        request = build_pi30_request("QPIGS")
+        self.assertEqual(request, b"QPIGS\xb7\xa9\r")
+        chunks = [(request,), tuple(bytes((b,)) for b in request),
+                  (b"AT+WFSS?\r\n" + request,)]
+        chunks.extend((request[:i], request[i:]) for i in range(1, len(request)))
+        for delivery in chunks:
+            with self.subTest(delivery=delivery):
+                status = await self._raw_pi30_exchange(delivery)
+                self.assertTrue(status["connected"])
+                self.assertTrue(status["identity_verified"])
+                self.assertFalse(status["identity_mismatch"])
+                self.assertTrue(status["operational_activity"])
+
+    async def test_raw_pi30_invalid_binary_crc_does_not_arm_readiness(self):
+        for delivery in ((b"QPIGS\xb7\xa8\r",), (b"QPIGS", b"\xb7", b"\xa8\r")):
+            with self.subTest(delivery=delivery):
+                status = await self._raw_pi30_exchange(delivery)
+                self.assertTrue(status["connected"])
+                self.assertTrue(status["identity_verified"])
+                self.assertFalse(status["operational_activity"])
+
     async def test_at_metadata_exchange_is_not_operational_data_plane(self) -> None:
         expected_pn = "E50000200000000001"
         proxy_done = asyncio.Event()

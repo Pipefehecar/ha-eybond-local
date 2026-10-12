@@ -100,6 +100,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Proxy Capture recognizes CRC-checked raw PI30 commands when checking cloud
+  session activity. Stopping or cancelling capture drains relay tasks and pending
+  trace writes before closing the recording file. Startup diagnostics report
+  connection, identity and activity separately; the existing timeout and live
+  endpoint-restoration checks remain unchanged.
+
 - An initially silent collector that reveals a short framed heartbeat can
   confirm its full PN through FC2 on the same socket instead of being closed
   and retried with another dialect (#23). A short PN alone still cannot claim

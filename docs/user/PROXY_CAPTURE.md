@@ -127,3 +127,16 @@ If the vendor app stops showing live data afterward:
 4. Check the vendor app again.
 
 If the restore action is unavailable or the collector still does not recover, do not repeat captures. Create a Support Archive and report the issue.
+
+The same rule applies if capture fails to start. Check that readings resume in
+Home Assistant and that the vendor app receives fresh data, not just its last
+saved readings. A startup timeout alone does not tell you whether the original
+server address was restored. If either connection remains broken or restoration
+is still pending, send the Home Assistant log and a fresh Support Archive rather
+than repeatedly starting capture or manually changing the endpoint.
+
+When support asks you to retry after updating, restart Home Assistant to load the
+updated code and first confirm normal communication has recovered. Enable debug
+logging before the new attempt. If it fails again, save that log; startup
+diagnostics distinguish connection, collector identity and observed cloud data
+exchange. Increasing the capture duration does not extend the startup timeout.

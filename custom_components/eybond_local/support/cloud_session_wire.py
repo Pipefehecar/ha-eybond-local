@@ -14,6 +14,7 @@ from ..collector.protocol import (
     decode_header,
 )
 from ..payload.modbus import crc16_modbus
+from ..payload.pi30 import build_request as build_pi30_request
 
 _MODBUS_FIXED_LEN_FCODES = frozenset({3, 4, 6})
 _MODBUS_WRITE_MULTIPLE_FCODE = 16
@@ -30,10 +31,20 @@ _KNOWN_EYBOND_FCODES = frozenset(
 )
 _MODBUS_INCOMPLETE = object()
 _ASCII_INCOMPLETE = object()
+# One bounded raw PI30 line, including its two escaped CRC bytes and CR.
+# Recognition is opt-in for transparent capture, not a new shadow carrier.
+_PI30_MAX_FRAME_LENGTH = 512
 
 
-def consume_cloud_message(buffer: bytearray) -> tuple[str, bytes] | None:
-    """Consume one complete AT, inverter, or EyeBond message from ``buffer``."""
+def consume_cloud_message(
+    buffer: bytearray, *, allow_pi30: bool = False,
+) -> tuple[str, bytes] | None:
+    """Consume one complete AT, inverter, or EyeBond message from ``buffer``.
+
+    Transparent observation may opt into CRC-verified raw PI30 (kind ``pi30``).
+    The default framing and shadow allowlists are unchanged. Legacy no-CRC
+    ASCII remains distinct: printable text is not proof of a valid PI30 CRC.
+    """
 
     if not buffer:
         return None
@@ -53,6 +64,11 @@ def consume_cloud_message(buffer: bytearray) -> tuple[str, bytes] | None:
         return None
     if modbus is not None:
         return "modbus", modbus
+
+    if allow_pi30:
+        pi30_frame = _consume_pi30_frame(buffer)
+        if pi30_frame is not None:
+            return "pi30", pi30_frame
 
     ascii_frame = _consume_g_ascii_frame(buffer)
     if ascii_frame is _ASCII_INCOMPLETE:
@@ -118,6 +134,31 @@ def _modbus_crc_is_valid(frame: bytes) -> bool:
     if len(frame) < 4:
         return False
     return crc16_modbus(frame[:-2]) == int.from_bytes(frame[-2:], "little")
+
+
+def _consume_pi30_frame(buffer: bytearray) -> bytes | None:
+    """Consume a bounded printable body with an exact PI30 CRC and terminator.
+
+    CRC bytes are binary, not part of the printable body. Rebuilding through
+    the payload helper also validates PI30's special CRC-byte escaping, without
+    duplicating it. No scanning past a bad line, stripping, or buffer mutation
+    on incomplete/invalid data. Legacy no-CRC G-ASCII is handled separately.
+    """
+
+    first = buffer[0]
+    if first != 0x28 and not 0x41 <= first <= 0x5A:
+        return None
+    carriage = buffer.find(b"\r", 0, _PI30_MAX_FRAME_LENGTH)
+    if carriage < 3:
+        return None
+    frame = bytes(buffer[:carriage + 1])
+    body = frame[:-3]
+    if body.startswith(b"AT+") or any(byte < 0x20 or byte > 0x7E for byte in body):
+        return None
+    if build_pi30_request(body.decode("ascii")) != frame:
+        return None
+    del buffer[:carriage + 1]
+    return frame
 
 
 def _consume_g_ascii_frame(buffer: bytearray) -> bytes | object | None:

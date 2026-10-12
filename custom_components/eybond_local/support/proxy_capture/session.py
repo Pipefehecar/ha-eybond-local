@@ -15,6 +15,9 @@ from ...collector.protocol import HEADER_SIZE, decode_header
 from ...payload.modbus import crc16_modbus
 from ..collector_cloud_proxy import (
     JsonLineWriter,
+    _await_completion,
+    _cancel_and_drain,
+    _close_writers,
     handle_proxy_client,
     parse_restore_target,
 )
@@ -70,6 +73,7 @@ class InProcessProxyCaptureHandler:
             asyncio.StreamWriter,
         ] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
+        self._stop_task: asyncio.Task[None] | None = None
         self._running = False
 
     @property
@@ -83,6 +87,9 @@ class InProcessProxyCaptureHandler:
 
         if self._running:
             return
+        if self._stop_task is not None:
+            await _await_completion(self._stop_task)
+            self._stop_task = None
         self._output_handle = await self._async_open_output(self._output_path)
         self._frame_writer = JsonLineWriter(self._output_handle)
         try:
@@ -99,52 +106,34 @@ class InProcessProxyCaptureHandler:
             )
             self._running = True
         except BaseException:
-            reserved_upstream = self._reserved_upstream
-            self._reserved_upstream = None
-            if reserved_upstream is not None:
-                _reader, writer = reserved_upstream
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-            output_handle = self._output_handle
-            self._output_handle = None
-            self._frame_writer = None
-            if output_handle is not None:
-                await self._async_close_output(output_handle)
+            await self.stop()
             raise
 
     async def stop(self) -> None:
         """Cancel active proxy tasks and close the trace stream."""
 
         self._running = False
+        if self._stop_task is None:
+            self._stop_task = asyncio.create_task(self._finish_stop())
+        await _await_completion(self._stop_task)
+
+    async def _finish_stop(self) -> None:
+        """One shared finalizer owns all producers before closing their sink."""
+
         tasks = tuple(self._tasks)
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+        await _cancel_and_drain(tasks)
         self._tasks.clear()
         reserved_upstream = self._reserved_upstream
         self._reserved_upstream = None
         if reserved_upstream is not None:
             _reader, writer = reserved_upstream
-            writer.close()
-            try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+            await _close_writers(writer)
 
-        output_handle = self._output_handle
+        frame_writer = self._frame_writer
         self._output_handle = None
         self._frame_writer = None
-        if output_handle is not None:
-            await self._async_close_output(output_handle)
+        if frame_writer is not None:
+            await frame_writer.close(self._async_close_output)
 
     async def handle_client(
         self,
