@@ -36,6 +36,23 @@ limited, not presented as complete vendor documentation. The sanitized
 `tests/fixtures/smg_protocol_11_7904.json` replay covers the unknown 6200 W
 fingerprint from issue #41. A read capture does not verify writes.
 
+## Numeric limits and shared battery maps
+
+The seven shared battery-voltage templates intentionally have no `minimum` or
+`maximum`: register compatibility does not establish a battery voltage class or
+valid setpoint interval. The former 48 V template bounds and broad 0–70 V
+workarounds are not specifications and must not be inherited as such. Explicit
+profile or device-scoped learned limits continue to apply; this policy does not
+infer limits from live battery voltage or divide a 48 V interval by two.
+
+`WriteCapability.number_minimum/number_maximum` supply HA's required numeric
+bounds from an explicit profile limit, or otherwise from the unsigned field's
+encoding and scale. Schema attributes identify each side as `profile` or
+`encoding`. These bounds are not a claim about safe battery settings. The Modbus
+write codec also rejects values outside the encoded field, even if the profile
+omits limits, so an unbounded u32 write cannot wrap and a scaled u16 cannot
+overflow. The existing confirmation, access and readback policy is unchanged.
+
 ## Independent branches, not sequential upgrades
 
 Protocol profiles 1, 2 and 11 independently extend the documented classic

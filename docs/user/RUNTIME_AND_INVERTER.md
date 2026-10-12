@@ -455,6 +455,16 @@ registers from smaller numbers; unsupported numbers are not assigned a guessed
 map. If a setting is missing, [active device learning](DEVICE_LEARNING.md) can
 sometimes identify additional cloud controls for the particular inverter.
 
+### Battery voltage settings
+
+Shared SMG controls do not assume that every inverter uses a 48 V battery.
+Known profile limits still apply. Where exact setpoint limits are unknown, HA
+shows only the range representable by the command's numeric field and scale.
+That technical range is **not** a safe operating range for your battery: use
+the inverter and battery documentation when choosing a value. Write confirmation
+and readback checks remain in place; device rejection is reported as an error.
+Existing inherited Shadow Learning profiles do not need to be learned again.
+
 ## Available, unavailable, and disabled entities
 
 The entity registry can contain more entities than your device page shows.

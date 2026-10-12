@@ -143,16 +143,12 @@
     },
     {
       "key": "battery_under_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "Mains-mode battery low-voltage protection; register 327. Window left wide because the setpoint limits are battery-voltage-grade dependent; the inverter validates its own range. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "note": "Mains-mode battery low-voltage protection; register 327. Battery-class-dependent setpoint limits are not inferred. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
       "tested": true
     },
     {
       "key": "battery_under_voltage_off_grid",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "Off-grid-mode battery low-voltage protection; register 329. Window left wide because the setpoint limits are battery-voltage-grade dependent; the inverter validates its own range. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
+      "note": "Off-grid-mode battery low-voltage protection; register 329. Battery-class-dependent setpoint limits are not inferred. Field->register confirmed by shadow-learning capture on this unit (dc6514).",
       "tested": true
     },
     {
@@ -374,10 +370,8 @@
       "write_function": 6,
       "group": "battery",
       "unit": "V",
-      "minimum": 0,
-      "maximum": 700,
       "step": 1,
-      "note": "MUST/SMG holding register 352. Window left wide; the inverter validates its own range.",
+      "note": "MUST/SMG holding register 352. Model-specific setpoint limits are not inferred.",
       "change_summary": "OP1 off-grid battery low-voltage protection.",
       "provenance": "doc_backed",
       "support_notes": "Cross-referenced from a shadow-learning run on this unit (dc6514): the SmartESS cloud wrote this register during control discovery.",

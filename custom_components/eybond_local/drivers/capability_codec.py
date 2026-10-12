@@ -7,6 +7,7 @@ capability value handling must not fork per driver.
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from typing import Any
 
 from ..models import WriteCapability, decimals_for_divisor
@@ -168,11 +169,17 @@ def _encode_scaled_u16_value(capability: WriteCapability, value: Any) -> int:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid_numeric_value:{capability.key}:{value}") from exc
 
-    raw_value = (
-        int(round(numeric * capability.divisor))
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError(f"invalid_numeric_value:{capability.key}:{value}")
+
+    scaled = (
+        numeric * capability.divisor
         if capability.divisor is not None
-        else int(round(numeric / float(capability.multiplier)))
+        else numeric / float(capability.multiplier)
     )
+    if not math.isfinite(scaled):
+        raise ValueError(f"invalid_numeric_value:{capability.key}:{value}")
+    raw_value = int(round(scaled))
     _validate_range(capability, raw_value)
     return raw_value
 
@@ -313,6 +320,8 @@ def _decode_time_words(capability: WriteCapability, raw_words: list[int]) -> str
 
 
 def _validate_range(capability: WriteCapability, raw_value: int) -> None:
+    if not 0 <= raw_value <= capability.encoding_maximum:
+        raise ValueError(f"value_outside_encoding:{capability.key}:{raw_value}")
     if capability.minimum is not None and raw_value < capability.minimum:
         raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
     if capability.maximum is not None and raw_value > capability.maximum:

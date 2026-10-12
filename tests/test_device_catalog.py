@@ -454,12 +454,10 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             [choice.value for choice in input_mode.choices], [0, 1, 2]
         )
 
-    def test_aninerel_anl_4200t_uses_24v_battery_voltage_windows(self) -> None:
-        # The unit is 24 V (the "24L" in the model name); the family templates
-        # carry 48 V-class windows (40.0-65.0 V) that would reject every valid
-        # 24 V setpoint. The exact limits for this model are undocumented,
-        # so the windows are deliberately wide and the inverter's own write
-        # validation is the authority.
+    def test_aninerel_anl_4200t_does_not_guess_battery_voltage_windows(self) -> None:
+        # Exact setpoint limits are undocumented. Neither a 48 V-class family
+        # window nor an arbitrary 0..70 V workaround belongs in this profile.
+        # The shared template retains scaling and technical encoding bounds.
         from custom_components.eybond_local.metadata.profile_loader import (
             load_driver_profile,
         )
@@ -477,9 +475,10 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
             "battery_overvoltage_protection_voltage",
             "battery_equalization_voltage",
         ):
-            self.assertEqual(caps[key].minimum, 0, key)
-            self.assertEqual(caps[key].maximum, 700, key)
-        # Overrides keep the template identity (scaled 0.1 V writes).
+            self.assertIsNone(caps[key].minimum, key)
+            self.assertIsNone(caps[key].maximum, key)
+            self.assertEqual(caps[key].number_maximum, 6553.5, key)
+        # Inheritance keeps the template identity (scaled 0.1 V writes).
         self.assertEqual(caps["battery_bulk_voltage"].value_kind, "scaled_u16")
         self.assertEqual(caps["battery_bulk_voltage"].divisor, 10)
 

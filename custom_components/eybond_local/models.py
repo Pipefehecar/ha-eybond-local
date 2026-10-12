@@ -279,6 +279,26 @@ class WriteCapability:
         return self._to_native(self.maximum)
 
     @property
+    def encoding_maximum(self) -> int:
+        """Largest raw value the numeric wire field can represent, not a setpoint limit."""
+
+        if self.bitmask:
+            return self.bitmask >> self.bitmask_shift
+        return 0xFFFFFFFF if self.value_kind == "u32" else 0xFFFF
+
+    @property
+    def number_minimum(self) -> int | float:
+        """HA requires a bound even when no device-specific minimum is known."""
+
+        return self.native_minimum if self.minimum is not None else 0
+
+    @property
+    def number_maximum(self) -> int | float:
+        """Use the scaled encoding ceiling when no device-specific maximum is known."""
+
+        return self.native_maximum if self.maximum is not None else self._to_native(self.encoding_maximum)
+
+    @property
     def native_step(self) -> float:
         """Return the native UI step."""
 

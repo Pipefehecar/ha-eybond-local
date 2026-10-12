@@ -12,45 +12,31 @@
   "capabilities": [
     {
       "key": "battery_bulk_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_overvoltage_protection_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_float_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_redischarge_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_under_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_under_voltage_off_grid",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     },
     {
       "key": "battery_equalization_voltage",
-      "minimum": 0,
-      "maximum": 700,
-      "note": "No exact battery-class limits are inferred for an unknown model. This broad 12/24/48 V UI window is not a hardware specification."
+      "note": "Exact model-specific setpoint limits are not documented. No inferred battery-voltage range is imposed; wire encoding and write confirmation still apply."
     }
   ]
 }

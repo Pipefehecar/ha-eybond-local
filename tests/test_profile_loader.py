@@ -154,8 +154,8 @@ class ProfileLoaderTests(unittest.TestCase):
             "battery_equalization_voltage",
         ):
             capability = profile.get_capability(key)
-            self.assertEqual(capability.minimum, 0, key)
-            self.assertEqual(capability.maximum, 700, key)
+            self.assertIsNone(capability.minimum, key)
+            self.assertIsNone(capability.maximum, key)
             self.assertEqual(capability.divisor, 10, key)
         with self.assertRaises(KeyError):
             profile.get_capability("low_dc_cutoff_soc")

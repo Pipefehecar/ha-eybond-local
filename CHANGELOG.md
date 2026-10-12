@@ -104,6 +104,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Shared SMG battery-voltage templates no longer impose guessed 48 V limits on
+  24 V inverters. Removed the earlier arbitrary 0–70 V workarounds as well.
+  Explicit profile limits remain enforced; missing limits use only the scaled
+  register encoding bounds required by HA, not a claimed safe battery range.
+  Numeric writes reject encoding overflow and non-finite scaled values before
+  transport I/O. Existing inherited learning overlays need no new learning run.
+
 - Inactive cloud-history sensor drafts preserve the actual source and provider
   instead of attributing SmartESS evidence to DESSMonitor. Power correlated in
   kW is correctly encoded in the draft's native W unit. These review artifacts
