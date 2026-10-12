@@ -604,8 +604,12 @@ class Pi30ThroughHubCacheTests(unittest.TestCase):
 
         # 1 + 2: every poll runs the SAME single full sequence -- no fast-only cycle.
         self.assertIs(first.mode, DriverReadMode.DELTA)
-        self.assertEqual(first_commands, self._FULL_SEQUENCE)
-        self.assertEqual(second_commands, self._FULL_SEQUENCE)
+        self.assertEqual(first_commands, self._FULL_SEQUENCE + ["QPIRI"])
+        self.assertEqual(second_commands, self._FULL_SEQUENCE + ["QPIRI"])
+        for result, commands in ((first, first_commands), (second, second_commands)):
+            self.assertEqual(result.diagnostics["pi30_read_commands"].split(", "), commands)
+            self.assertEqual(result.diagnostics["pi30_poll_commands"].split(", "), self._FULL_SEQUENCE)
+            self.assertEqual(result.diagnostics["pi30_metadata_commands"], "QPIRI")
         self.assertIn("alarm_status", first.values)
         alarm_value = first.values["alarm_status"]
         # QPIWS timed out transiently this cycle -> not in the delta.
@@ -630,12 +634,15 @@ class Pi30ThroughHubCacheTests(unittest.TestCase):
         self.assertEqual(second.diagnostics["pi30_poll_mode"], "delta")
         self.assertNotIn("pi30_poll_groups_run", first.diagnostics)
         self.assertNotIn("pi30_group_age_seconds", first.diagnostics)
-        # Commands = the actual executed sequence; first cycle measured all 13.
+        # Telemetry measured all 13; the separate metadata attempt is explicit.
+        self.assertEqual(first.diagnostics["pi30_poll_scope"], "telemetry")
         self.assertEqual(first.diagnostics["pi30_poll_commands"].split(", "), self._FULL_SEQUENCE)
         self.assertEqual(first.diagnostics["pi30_poll_attempted"], 13)
         self.assertEqual(first.diagnostics["pi30_poll_skipped"], 0)
         # Wall-clock total (not a sum of pieces) is present and non-negative.
         self.assertGreaterEqual(first.diagnostics["pi30_poll_total_ms"], 0)
+        self.assertEqual(first.diagnostics["pi30_read_commands"].split(", "), _first_cmds)
+        self.assertRegex(first.diagnostics["pi30_metadata_command_durations_ms"], r"^QPIRI=\d+:timeout$")
         # Reachability-aware completeness: no unsupported => estimate complete.
         self.assertEqual(first.diagnostics["pi30_full_cycle_estimate_complete"], True)
         self.assertEqual(first.diagnostics["pi30_full_cycle_unmeasured_commands"], "")
@@ -743,6 +750,11 @@ class Pi30DiagnosticTruthfulnessTests(unittest.TestCase):
             transport, inverter, runtime_state=state if state is not None else {},
             poll_interval=10.0, now_monotonic=100.0,
         )
+        self.assertEqual(result.diagnostics["pi30_read_commands"].split(", "), transport.commands)
+        self.assertEqual([
+            entry.split("=")[0]
+            for entry in result.diagnostics["pi30_read_command_durations_ms"].split(", ")
+        ], transport.commands)
         return result, transport.commands
 
     def test_optional_timeout_stays_delta_and_counts_timeout(self) -> None:
@@ -843,12 +855,15 @@ class Pi30DiagnosticTruthfulnessTests(unittest.TestCase):
     def test_poll_total_is_wall_clock_and_stats_match_actual_sequence(self) -> None:
         result, cmds = self._run(self._run_single_cycle(responses=self._full_runtime()))
         # command durations diagnostics list exactly the executed wire sequence.
-        durations = result.diagnostics["pi30_poll_command_durations_ms"]
+        durations = result.diagnostics["pi30_read_command_durations_ms"]
         listed = [entry.split("=")[0] for entry in durations.split(", ")]
         self.assertEqual(listed, cmds)
-        self.assertEqual(result.diagnostics["pi30_poll_commands"], ", ".join(cmds))
-        self.assertGreaterEqual(result.diagnostics["pi30_poll_total_ms"], 0)
-        self.assertEqual(result.diagnostics["pi30_poll_attempted"], len(cmds))
+        self.assertEqual(result.diagnostics["pi30_read_commands"], ", ".join(cmds))
+        self.assertEqual(result.diagnostics["pi30_poll_commands"], ", ".join(cmds[:-1]))
+        self.assertEqual(cmds[-1], "QPIRI")
+        self.assertEqual(result.diagnostics["pi30_metadata_commands"], "QPIRI")
+        self.assertGreaterEqual(result.diagnostics["pi30_read_total_ms"], result.diagnostics["pi30_poll_total_ms"])
+        self.assertEqual(result.diagnostics["pi30_poll_attempted"], len(cmds) - 1)
 
     def test_qet_final_unsupported_reachability_estimate_complete(self) -> None:
         async def _run():
@@ -925,11 +940,11 @@ class Pi30DiagnosticTruthfulnessTests(unittest.TestCase):
         # Independent dynamics still ran.
         self.assertEqual(result.values["pv_generation_month"], 7)  # QEM
         self.assertEqual(result.values["ac_in_generation_year"], 54)  # QLY
-        self.assertIn("QLD2026040", cmds[-1] if cmds else "")  # last dynamic still sent
+        self.assertEqual(cmds[-2:], ["QLD20260407", "QPIRI"])  # energy then metadata
         self.assertIn("QEY:att1/ok0/to0/err1", result.diagnostics["pi30_command_cumulative"])
 
     def test_cycle_wall_ms_is_deterministic_from_the_clock(self) -> None:
-        # pi30_poll_total_ms is the whole-cycle wall-clock (end monotonic minus
+        # pi30_read_total_ms is the whole-read wall-clock (end monotonic minus
         # start monotonic). With a deterministic monotonic clock it is a pure
         # function of that clock -- identical across identical runs.
         class _Clock:
@@ -958,7 +973,9 @@ class Pi30DiagnosticTruthfulnessTests(unittest.TestCase):
             with mock.patch.object(pi30_module.time, "monotonic", clock):
                 result = self._run(_read())
             span = int(round((clock.values[-1] - clock.values[0]) * 1000.0))
-            return result.diagnostics["pi30_poll_total_ms"], span
+            self.assertGreaterEqual(result.diagnostics["pi30_read_total_ms"],
+                                    result.diagnostics["pi30_poll_total_ms"])
+            return result.diagnostics["pi30_read_total_ms"], span
 
         total_a, span_a = _one_run()
         total_b, span_b = _one_run()
@@ -1092,7 +1109,9 @@ class Pi30UnsupportedRemovalTests(unittest.TestCase):
             self.assertEqual(result.diagnostics["pi30_poll_failed_commands"], command)
             self.assertEqual(result.diagnostics["pi30_required_stale_commands"], command)
             self.assertEqual(result.diagnostics[f"pi30_{command.lower()}_age_seconds"], 10.0)
-            self.assertEqual(transport.commands, Pi30ThroughHubCacheTests._FULL_SEQUENCE)
+            self.assertEqual(transport.commands, Pi30ThroughHubCacheTests._FULL_SEQUENCE + ["QPIRI"])
+            self.assertEqual(result.diagnostics["pi30_read_commands"].split(", "), transport.commands)
+            self.assertEqual(result.diagnostics["pi30_metadata_commands"], "QPIRI")
 
         for command in ("QPIGS", "QMOD"):
             for failure in ("NAK", asyncio.TimeoutError(), b"", b"(Lxx\r", ""):

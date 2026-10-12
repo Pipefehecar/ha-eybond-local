@@ -106,6 +106,12 @@ Current** and **Max Utility Charge Current**. The first limits total battery
 charging current; the second limits charging from the grid. They are dropdowns,
 not unrestricted number inputs: available values come from the inverter itself.
 
+The controls can appear after the first few successful refreshes, once the
+integration has read the available choices. A slow initial detection does not
+prevent this later check. These extra read-only queries are bounded and stop
+after acquisition succeeds or the retry limit is reached; they are not added
+to every poll. You do not need to remove and add the device again.
+
 For devices without an existing model-specific control map, these controls are
 marked **untested** until local writes are confirmed. Enabling Full Control does
 not change any inverter setting. If the inverter cannot supply a valid list of

@@ -13,7 +13,10 @@ from synthetic import SYNTHETIC_COLLECTOR_IP, SYNTHETIC_COLLECTOR_PN, SYNTHETIC_
 
 
 @pytest.mark.parametrize("mode", ["read_only", "auto", "full"])
-async def test_advertised_currents_survive_setup_reload_without_writes(hass, fake_runtime, monkeypatch, mode):
+@pytest.mark.parametrize("deferred", [False, True])
+async def test_advertised_currents_survive_setup_reload_without_writes(
+    hass, fake_runtime, monkeypatch, mode, deferred,
+):
     from conftest import FakeRuntimeManager
 
     target = ProbeTarget(0x0994, 1, 0)
@@ -30,6 +33,12 @@ async def test_advertised_currents_survive_setup_reload_without_writes(hass, fak
     )
     inverter = await Pi30Driver().async_probe(transport, target)
     assert inverter is not None
+    enriched_inverter = inverter
+    current_keys = {"max_charging_current", "max_ac_charging_current"}
+    if deferred:
+        inverter = replace(inverter, capabilities=tuple(
+            cap for cap in inverter.capabilities if cap.key not in current_keys
+        ))
 
     async def refresh(self, *, poll_interval=None):
         return RuntimeSnapshot(
@@ -68,6 +77,22 @@ async def test_advertised_currents_survive_setup_reload_without_writes(hass, fak
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     registry = er.async_get(hass)
+    if deferred:
+        for key in current_keys:
+            assert registry.async_get_entity_id(
+                "select", DOMAIN, f"{entry.entry_id}_select_{key}",
+            ) is None
+        inverter = enriched_inverter
+        for _ in range(2):
+            await entry.runtime_data.async_refresh()
+            await hass.async_block_till_done()
+        for key in current_keys:
+            matches = [
+                entity for entity in er.async_entries_for_config_entry(registry, entry.entry_id)
+                if entity.unique_id == f"{entry.entry_id}_select_{key}"
+            ]
+            assert len(matches) == (1 if mode == "full" else 0)
+        assert writes == []
     for reload in (False, True):
         if reload:
             assert await hass.config_entries.async_reload(entry.entry_id)

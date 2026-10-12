@@ -66,7 +66,11 @@ from .command_support import (
     unsupported_commands as _unsupported_commands,
 )
 from .read_result import DriverReadMode, DriverReadResult
-from .pi30_controls import async_enrich_charge_current_controls
+from .pi30_controls import (
+    async_acquire_charge_current_controls,
+    async_enrich_charge_current_controls,
+    charge_current_acquisition_diagnostics,
+)
 from .support_probe import SupportProbeRequest
 
 
@@ -319,6 +323,7 @@ class Pi30Driver(InverterDriver):
         capabilities = _build_pi30_capabilities(config_values, profile.capabilities)
         # Enrichment must not extend the existing driver probe window or make
         # unsupported optional queries a reason to lose positive PI30 identity.
+        # Missing lists are acquired separately on the bound runtime session.
         capabilities = await async_enrich_charge_current_controls(
             session, config_values, capabilities,
             timeout=min(3.0, max(0.0, self.probe_timeout - (time.monotonic() - started) - 0.1)),
@@ -348,6 +353,7 @@ class Pi30Driver(InverterDriver):
         poll_interval: float | None = None,
         now_monotonic: float | None = None,
     ) -> DriverReadResult:
+        read_started = time.monotonic()
         session = self._session(transport, inverter.probe_target)
         values, removed_keys, diagnostics = await _async_collect_runtime_values(
             session,
@@ -361,6 +367,41 @@ class Pi30Driver(InverterDriver):
                 _schema_for_inverter(inverter, self.register_schema_name),
             )
         )
+        # Separate bounded metadata acquisition, after the normal telemetry
+        # pass. It also covers restored bindings that never ran this probe.
+        # Optional metadata must not consume more wire time when both required
+        # telemetry reads failed. These are this cycle's values, not the cache.
+        metadata_timings: list[tuple[str, int, str]] = []
+        metadata_started = time.monotonic()
+        fresh_required = bool(values.keys() & (qpigs_output_keys() | {"operating_mode_code"}))
+        if fresh_required:
+            values.update(await async_acquire_charge_current_controls(
+                session, inverter, runtime_state=runtime_state, command_timings=metadata_timings,
+            ))
+        diagnostics.update(charge_current_acquisition_diagnostics(runtime_state))
+        # The recurring telemetry estimate must not learn the cost of finite
+        # acquisition. Expose both phases plus their actual combined timeline.
+        metadata_commands = ", ".join(command for command, _ms, _outcome in metadata_timings)
+        metadata_durations = ", ".join(
+            f"{command}={ms}:{outcome}" for command, ms, outcome in metadata_timings
+        )
+        diagnostics.update({
+            "pi30_poll_scope": "telemetry",
+            "pi30_metadata_commands": metadata_commands,
+            "pi30_metadata_command_durations_ms": metadata_durations,
+            "pi30_metadata_total_ms": int(round((time.monotonic() - metadata_started) * 1000)),
+            "pi30_metadata_status": (
+                "attempted" if metadata_timings else
+                "skipped" if fresh_required else "no_fresh_required_telemetry"
+            ),
+            "pi30_read_commands": ", ".join(filter(None, (
+                diagnostics.get("pi30_poll_commands", ""), metadata_commands,
+            ))),
+            "pi30_read_command_durations_ms": ", ".join(filter(None, (
+                diagnostics.get("pi30_poll_command_durations_ms", ""), metadata_durations,
+            ))),
+            "pi30_read_total_ms": int(round((time.monotonic() - read_started) * 1000)),
+        })
         # Always DELTA. PI30 runs a single sequential cycle of all reachable
         # commands, but the result is never a *proven* complete snapshot: optional
         # commands (QPIWS/Q1) may fail transiently, known-unsupported commands are
@@ -833,11 +874,12 @@ def _build_pi30_read_meta(
     command_timings: list[tuple[str, str, int, str]],
     cycle_wall_ms: int,
 ) -> dict[str, Any]:
-    """Return truthful structured diagnostics for one single-cycle PI30 poll.
+    """Return truthful diagnostics for the recurring PI30 telemetry pass.
 
     ``command_timings`` entries are ``(cache_key, wire_command, duration_ms,
-    outcome)`` in the ACTUAL executed order. ``cycle_wall_ms`` is the wall-clock
-    of the whole single sequential cycle. The read mode is always DELTA; the
+    outcome)`` in the ACTUAL telemetry order. ``cycle_wall_ms`` is the wall-clock
+    of that sequential pass, excluding optional capability acquisition. The
+    driver adds separate metadata and combined-read diagnostics. Mode is DELTA; the
     full-cycle estimate is reachability-aware (see :func:`_pi30_unreachable_commands`).
     """
 

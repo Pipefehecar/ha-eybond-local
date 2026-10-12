@@ -25,8 +25,12 @@ the GitHub release body should be rendered from the matching version section her
 - PI30 devices without model-specific charge-current controls can expose
   **Max Total Charge Current** and **Max Utility Charge Current** in Full
   Control, using only the selectable values read from that inverter (#58).
-  These writes remain untested. Two bounded read-only queries enrich detection;
-  normal polling and existing model-specific controls are unchanged.
+  These writes remain untested. Bounded read-only acquisition can finish after
+  detection, including restored bindings, so a slow initial probe does not
+  permanently omit the controls. Acquisition stops after a limited number of
+  attempts; existing model-specific controls are unchanged. Diagnostics separate
+  recurring telemetry from this metadata phase and retain the full command
+  sequence and total read duration.
 
 - Anenji GES48120M250-500P auto-binds through exact Sumry/GES identity anchors
   (model 45, product class 10, protocol raw 220) and exposes the existing

@@ -637,15 +637,17 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
             "QLY2026", "QLM202604", "QLD20260407",
         ]
 
-        # Poll THREE times with advancing time; the sequence is identical every
-        # time (no cadence, no empty cycle, no fast-only cycle).
-        for t in (100.0, 110.0, 130.0):
+        # Telemetry stays identical on every poll. Separate optional capability
+        # acquisition tries fresh QPIRI at most three times, then stops for this
+        # session (this fixture has no runtime QPIRI reply).
+        for attempt, t in enumerate((100.0, 110.0, 130.0, 140.0)):
             transport.commands.clear()
             values = await _read_values(
                 driver, transport, inverter,
                 runtime_state=runtime_state, poll_interval=10.0, now_monotonic=t,
             )
-            self.assertEqual(transport.commands, full_sequence)
+            self.assertEqual(transport.commands, full_sequence + (["QPIRI"] if attempt < 3 else []))
+            self.assertEqual(values["pi30_poll_commands"], ", ".join(full_sequence))
             # All command families present in every cycle.
             self.assertIn("alarm_status", values)  # QPIWS
             self.assertIn("inverter_charge_state", values)  # Q1
