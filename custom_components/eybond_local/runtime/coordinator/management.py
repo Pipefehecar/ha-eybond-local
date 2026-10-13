@@ -41,14 +41,17 @@ class CoordinatorManagementMixin:
             # _runtime_operation_lock so a write and a refresh never interleave
             # Modbus frames on the shared transport (which could cross-correlate
             # the write read-back with a poll response on a safety-critical
-            # write). The follow-up refresh is only scheduled here, so it takes
-            # the lock later in its own task — no re-entrancy.
+            # write). Release the lock before the follow-up refresh takes it
+            # again — no re-entrancy.
             async with self._runtime_operation_lock:
                 written_value = await self._runtime.async_write_capability(capability_key, value)
         except Exception:
             await self.async_request_refresh()
             raise
-        await self.async_request_refresh()
+        # A debounced request may return before it publishes anything. Wait for
+        # HA's refresh/publication lifecycle, using observed data rather than
+        # projecting the requested value or treating an ACK as confirmation.
+        await self.async_refresh()
         return written_value
 
     async def async_apply_preset(self, preset_key: str) -> dict[str, object]:
@@ -70,7 +73,8 @@ class CoordinatorManagementMixin:
         except Exception:
             await self.async_request_refresh()
             raise
-        await self.async_request_refresh()
+        # Presets need the same publication guarantee as individual writes.
+        await self.async_refresh()
         return result
 
     async def async_sync_inverter_clock(self) -> dict[str, str]:

@@ -1648,6 +1648,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 return None
 
             coordinator.async_request_refresh = _noop_refresh
+            coordinator.async_refresh = _noop_refresh
 
             poll_task = asyncio.create_task(coordinator._async_update_data())
             await poll_started.wait()  # poll now holds the lock

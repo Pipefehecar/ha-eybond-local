@@ -415,6 +415,12 @@ The inverter itself is the final authority for a write. EyeBond Local sends the
 requested value and checks readback when the protocol supports confirmation. A
 rejected or unchanged value is reported instead of being treated as success.
 
+After a successful write or preset, the integration waits for the Home Assistant
+state refresh before completing the action. This can take a polling cycle;
+displayed values come from readings, not from assuming the requested change
+succeeded. If that refresh fails, affected entities can become unavailable
+rather than showing the requested value as confirmed.
+
 Some experimental models have a large document-backed settings surface whose
 writes have not yet been confirmed on that exact hardware. Those entities stay
 hidden in Auto mode and disabled by default even after Full Control is selected.

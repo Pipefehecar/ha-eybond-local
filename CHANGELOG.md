@@ -109,6 +109,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Completed inverter control writes and presets wait for the Home Assistant
+  state refresh instead of leaving it queued behind the refresh debounce timer
+  (#58). Values still come from device reads, not optimistic assignments;
+  write confirmation, rejection handling and transport serialization are unchanged.
+
 - PI30 charging-current sensors retain numeric ampere values while selects show
   their labelled choices. Accepted built-in setting writes request fresh QPIRI
   or QFLAG readback instead of relying on cached settings; missing or unchanged
