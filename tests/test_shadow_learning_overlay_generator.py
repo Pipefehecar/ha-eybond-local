@@ -1014,6 +1014,23 @@ class LearnedControlRiskClassifierTests(unittest.TestCase):
         self.assertEqual(result["risk_level"], RISK_UNCERTAIN)
         self.assertIn("numeric_without_bounded_range", result["reasons"])
 
+    def test_known_numeric_kinds_without_cloud_bounds_remain_reviewable(self) -> None:
+        capabilities = [
+            _capability(key="waiting_time", register=330, value_kind="u16"),
+            _capability(key="voltage_point", register=352, value_kind="scaled_u16", divisor=10),
+            _capability(key="overload_threshold", register=353, value_kind="u16"),
+        ]
+        for capability in capabilities:
+            capability.pop("minimum", None)
+            capability.pop("maximum", None)
+        review = build_learned_control_review_model(capabilities)
+        self.assertEqual(set(review["enabled_by_default"]), {
+            "waiting_time", "voltage_point", "overload_threshold",
+        })
+        self.assertEqual(review["excluded_by_policy"], [])
+        self.assertTrue(all("unknown_value_kind" not in row["risk_reasons"]
+                            for row in review["learned_all"]))
+
     def test_enum_without_meaningful_labels_is_uncertain(self) -> None:
         result = classify_learned_control_risk(
             _capability(value_kind="enum", enum_map={2: "2", 5: "5"})

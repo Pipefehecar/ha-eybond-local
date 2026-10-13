@@ -60,6 +60,7 @@ from ...support.runtime_projection import (
     metadata_source_payload,
 )
 from ...support.shadow_learning.review_model import normalize_activation_selection
+from ...support.shadow_learning.session import inspect_shadow_learning_recovery
 from ...support.shadow_learning.read_evidence import (
     LearnedReadActivationContext,
     ShadowReadRoute,
@@ -77,6 +78,25 @@ _DEVICE_SCOPED_OVERLAY_ACTIVATION_OPTION_KEY = "device_scoped_overlay_activation
 
 class CoordinatorSupportMixin:
     """Coordinate support artifacts without owning runtime transport semantics."""
+
+    async def _async_shadow_learning_recovery_diagnostics(self) -> dict[str, object]:
+        """Inspect disk separately from the coordinator cache, without repairing it."""
+        config_dir = Path(self.hass.config.config_dir)
+        entry_id = self.config_entry.entry_id
+        collector_pn = self.smartess_collector_pn
+        values = await self.hass.async_add_executor_job(
+            lambda: inspect_shadow_learning_recovery(
+                config_dir, entry_id=entry_id, collector_pn=collector_pn,
+            )
+        )
+        values["shadow_learning_recovery_cache_loaded"] = bool(
+            getattr(self, "_shadow_learning_session_state_loaded", False)
+        )
+        values["shadow_learning_recovery_cached_record_present"] = (
+            getattr(self, "_cached_shadow_learning_session_state", None) is not None
+        )
+        values["shadow_learning_recovery_ui_pending"] = self.shadow_learning_restore_pending
+        return values
 
     @property
     def smartess_known_family_draft_plan(self) -> SmartEssKnownFamilyDraftPlan | None:
@@ -278,9 +298,11 @@ class CoordinatorSupportMixin:
             _integration_build_runtime_values
         )
         collector_registry_lookup = await self._async_collector_registry_lookup()
+        recovery_diagnostics = await self._async_shadow_learning_recovery_diagnostics()
         support_bundle_payload = self._build_support_bundle_payload(
             integration_build_values=integration_build_values,
             collector_registry_lookup=collector_registry_lookup,
+            shadow_learning_recovery=recovery_diagnostics,
         )
         path = await self.hass.async_add_executor_job(
             lambda: export_support_bundle(
@@ -523,9 +545,11 @@ class CoordinatorSupportMixin:
                     if snapshot is not None:
                         self.data = snapshot
 
+            recovery_diagnostics = await self._async_shadow_learning_recovery_diagnostics()
             support_bundle_payload = self._build_support_bundle_payload(
                 integration_build_values=integration_build_values,
                 collector_registry_lookup=collector_registry_lookup,
+                shadow_learning_recovery=recovery_diagnostics,
             )
 
         return support_bundle_payload, raw_capture

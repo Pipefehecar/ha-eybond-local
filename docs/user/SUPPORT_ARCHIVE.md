@@ -65,6 +65,13 @@ Depending on what is available for this entry, one archive can include:
 - an anonymized replay fixture when one can be built safely;
 - device-learning or cloud evidence that already belongs to this entry.
 
+If the **Retry restoring collector connection** action is missing after failed
+learning, create a fresh archive without starting another learning session. The
+export checks whether a recovery record is present, readable and belongs to this
+entry, and compares it with the cached state. This check does not change the
+collector's address or clear recovery. An absent record alone does not confirm
+that restoration succeeded; older learning traces can still be included as history.
+
 If traffic capture fails while reading the collector's server address, create
 the archive just after that attempt. It includes the last collector-management
 result and, when available, which read failed and whether the connection changed

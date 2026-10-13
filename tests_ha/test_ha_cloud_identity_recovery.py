@@ -1,6 +1,7 @@
 """Cloud identity and endpoint recovery through the real HA options lifecycle."""
 
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -8,6 +9,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.eybond_local.models import CollectorInfo, RuntimeSnapshot
 from custom_components.eybond_local.support.shadow_learning.session import (
+    active_shadow_learning_state_path,
     build_shadow_learning_session_state,
 )
 from test_ha_config_flow import collector_entry
@@ -16,6 +18,33 @@ from synthetic import SYNTHETIC_COLLECTOR_PN, SYNTHETIC_SERVER_IP
 
 def local_endpoint():
     return f"{SYNTHETIC_SERVER_IP},18899,TCP"
+
+
+async def test_support_recovery_diagnostics_does_not_repair_or_trust_cache(
+    hass, collector_entry, fake_runtime,
+):
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = collector_entry.runtime_data
+    path = active_shadow_learning_state_path(Path(hass.config.config_dir))
+    try:
+        coordinator._cached_shadow_learning_session_state = None
+        coordinator._shadow_learning_session_state_loaded = True
+        missing = await coordinator._async_shadow_learning_recovery_diagnostics()
+        assert missing["shadow_learning_recovery_disk_status"] == "missing"
+        assert missing["shadow_learning_recovery_cache_loaded"] is True
+        await hass.async_add_executor_job(path.parent.mkdir, 511, True, True)
+        await hass.async_add_executor_job(path.write_text, "{broken")
+        broken = await coordinator._async_shadow_learning_recovery_diagnostics()
+        assert broken["shadow_learning_recovery_disk_status"] == "invalid_json"
+        assert coordinator._cached_shadow_learning_session_state is None
+        assert coordinator._shadow_learning_session_state_loaded is True
+        payload = coordinator._build_support_bundle_payload(shadow_learning_recovery=broken)
+        assert payload["runtime"]["metadata"]["shadow_learning_recovery_disk_status"] == "invalid_json"
+        assert await hass.async_add_executor_job(path.read_text) == "{broken"
+    finally:
+        await hass.async_add_executor_job(path.unlink, True)
+        await hass.config_entries.async_unload(collector_entry.entry_id)
 
 
 @pytest.mark.parametrize("family,host,provider,source", [

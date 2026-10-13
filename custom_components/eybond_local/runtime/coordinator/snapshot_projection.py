@@ -316,12 +316,14 @@ class CoordinatorSnapshotProjectionMixin:
         *,
         integration_build_values: Mapping[str, object] | None = None,
         collector_registry_lookup: tuple[str, Any | None] | None = None,
+        shadow_learning_recovery: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         inverter = self.data.inverter
         metadata = self.effective_metadata
         smartess_protocol = metadata.smartess_protocol
         values = self.data.runtime_values()
         values.update(integration_build_values or _integration_build_runtime_values())
+        values.update(shadow_learning_recovery or {})
         values.update(self._collector_transport_profile_runtime_values())
         values.update(
             self._collector_original_endpoint_runtime_values(

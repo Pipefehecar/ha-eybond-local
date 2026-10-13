@@ -223,6 +223,59 @@ def clear_shadow_learning_session_state(config_dir: Path) -> None:
         return
 
 
+def inspect_shadow_learning_recovery(
+    config_dir: Path, *, entry_id: str, collector_pn: str,
+) -> dict[str, object]:
+    """Read diagnostic facts, never grant ownership or change recovery state.
+
+    Do not export endpoints, identifiers, filenames, arbitrary errors or a foreign
+    entry's record. A missing record is not proof of successful restoration.
+    """
+    prefix = "shadow_learning_recovery_"
+    try:
+        with active_shadow_learning_state_path(config_dir).open("rb") as stream:
+            raw = stream.read(65537)
+    except FileNotFoundError:
+        return {prefix + "disk_status": "missing"}
+    except OSError:
+        return {prefix + "disk_status": "unreadable"}
+    if len(raw) > 65536:
+        return {prefix + "disk_status": "oversized"}
+    try:
+        payload = json.loads(raw)
+    except (UnicodeError, ValueError, RecursionError):
+        return {prefix + "disk_status": "invalid_json"}
+    if not isinstance(payload, dict):
+        return {prefix + "disk_status": "invalid_record"}
+    owner = payload.get("entry_id")
+    pn = payload.get("collector_pn")
+    if not isinstance(owner, str) or not isinstance(pn, str):
+        return {prefix + "disk_status": "invalid_record"}
+    if owner and owner != entry_id:
+        return {prefix + "disk_status": "foreign_entry"}
+    if collector_pn and pn and pn != collector_pn:
+        return {prefix + "disk_status": "collector_mismatch"}
+    if not owner or not pn or not collector_pn:
+        return {prefix + "disk_status": "identity_incomplete"}
+    status = payload.get("status")
+    known_statuses = _ACTIVE_SHADOW_LEARNING_SESSION_STATUSES | {
+        "restore_failed", "stopped", "failed",
+    }
+    status = status if isinstance(status, str) and status in known_statuses else "unknown"
+    result: dict[str, object] = {
+        prefix + "disk_status": "current_entry",
+        prefix + "record_status": status,
+        prefix + "pending": status in {"restoring", "restore_failed"},
+        prefix + "restore_required": payload.get("restore_required") is True,
+        prefix + "original_endpoint_present": bool(payload.get("original_endpoint")),
+        prefix + "last_restore_error_present": bool(payload.get("last_restore_error")),
+    }
+    attempts = payload.get("restore_attempt_count")
+    if type(attempts) is int and attempts >= 0:
+        result[prefix + "attempt_count"] = attempts
+    return result
+
+
 def shadow_learning_session_timestamp() -> str:
     """Return one UTC timestamp used for shadow session state transitions."""
 

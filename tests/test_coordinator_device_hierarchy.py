@@ -657,6 +657,9 @@ def _install_coordinator_stubs() -> None:
     support_shadow_session.load_shadow_learning_session_state = (
         lambda *args, **kwargs: None
     )
+    support_shadow_session.inspect_shadow_learning_recovery = (
+        lambda *args, **kwargs: {"shadow_learning_recovery_disk_status": "missing"}
+    )
     support_shadow_session.save_shadow_learning_session_state = (
         lambda *args, **kwargs: None
     )
@@ -11156,6 +11159,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             coordinator._async_update_data_with_runtime_lock = _refresh
             coordinator._async_collector_registry_lookup = _registry_lookup
+            async def _recovery_diagnostics():
+                return {"shadow_learning_recovery_disk_status": "missing"}
+            coordinator._async_shadow_learning_recovery_diagnostics = _recovery_diagnostics
             coordinator._runtime = types.SimpleNamespace(
                 async_capture_support_evidence=_capture
             )

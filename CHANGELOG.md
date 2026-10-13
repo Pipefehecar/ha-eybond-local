@@ -9,6 +9,11 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Support exports distinguish missing, unreadable, malformed, foreign and
+  matching Shadow Learning recovery records, alongside the coordinator's cached
+  recovery state. This read-only diagnostic does not clear recovery, expose saved
+  endpoints or identifiers, or treat a missing file as successful restoration.
+
 - SmartESS and DESSMonitor active Shadow Learning reuse one verified HTTPS
   connection per control-discovery run. Unknown-delivery failures stop the run
   without retrying commands; cancellation drains the outstanding request before
