@@ -9,6 +9,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Aninerel ANL-4200T-24L-W-PRO gains five captured numeric controls: four SOC
+  thresholds and maximum discharge-current protection (#60). They remain
+  untested and require Full Control unless already activated through learning.
+  No ranges or tested flags are borrowed from other models. Reviewed equivalent
+  learned controls retain their entity IDs, custom names and saved selections
+  after upgrading, without duplicate builtin controls.
+
 - Support exports distinguish missing, unreadable, malformed, foreign and
   matching Shadow Learning recovery records, alongside the coordinator's cached
   recovery state. This read-only diagnostic does not clear recovery, expose saved

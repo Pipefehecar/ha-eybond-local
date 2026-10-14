@@ -19,6 +19,7 @@ from ...metadata.effective_metadata_snapshot import (
     EffectiveMetadataSnapshot,
     effective_metadata_snapshot_from_dict,
 )
+from ...metadata.learned_control_aliases import retain_builtin_controls
 from ...models import RuntimeSnapshot
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,8 @@ class CoordinatorInverterProfileMixin:
         right after detection) resolves the effective metadata for the detected device
         and, when a device-scoped overlay is active, appends the activated learned
         capabilities (plus any capability group they require) so they materialize as
-        entities and are writable. Detected capabilities are preserved; none are removed.
+        entities and are writable. Explicitly promoted equivalents keep their
+        activated learned keys instead of creating duplicate builtin entities.
         """
 
         if inverter is None:
@@ -107,14 +109,19 @@ class CoordinatorInverterProfileMixin:
             if profile is None:
                 self._device_overlay_merge_status = "no_profile_metadata"
                 return inverter
-            existing_keys = {capability.key for capability in inverter.capabilities}
+            retained = retain_builtin_controls(
+                inverter.capabilities,
+                profile.capabilities,
+                driver_key=getattr(inverter, "driver_key", ""),
+            )
+            existing_keys = {capability.key for capability in retained}
             learned = tuple(
                 capability
                 for capability in profile.capabilities
                 if capability.is_device_scoped_experimental
                 and capability.key not in existing_keys
             )
-            if not learned:
+            if not learned and retained == inverter.capabilities:
                 already = sum(
                     1
                     for capability in inverter.capabilities
@@ -134,7 +141,7 @@ class CoordinatorInverterProfileMixin:
             )
             return dataclasses.replace(
                 inverter,
-                capabilities=inverter.capabilities + learned,
+                capabilities=retained + learned,
                 capability_groups=inverter.capability_groups + extra_groups,
             )
         except Exception as exc:

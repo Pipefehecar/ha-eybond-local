@@ -196,7 +196,7 @@ class ClassicSmgWriteProfileTests(unittest.TestCase):
             "modbus_smg/models/smg_6200.json": (38, 30, 2),
             "modbus_smg/models/anenji_4200_protocol_1.json": (30, 0, 0),
             "modbus_smg/models/smg_variant_4200.json": (43, 21, 0),
-            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json": (30, 22, 0),
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json": (35, 22, 0),
             "modbus_smg/models/anenji_op2_6200.json": (37, 25, 2),
             "modbus_smg/models/anenji_anj_5kw_48v_wifi.json": (40, 40, 0),
         }

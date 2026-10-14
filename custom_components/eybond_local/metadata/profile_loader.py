@@ -340,7 +340,21 @@ def _parse_capability(
         metadata_scope=metadata_scope,
         write_function=_optional_int(resolved_raw.get("write_function")),
         poll_readback=bool(resolved_raw.get("poll_readback", True)),
+        learned_control_aliases=_parse_learned_control_aliases(
+            resolved_raw.get("learned_control_aliases", [])
+        ),
     )
+
+
+def _parse_learned_control_aliases(raw: Any) -> tuple[str, ...]:
+    """Accept only explicit legacy learned keys, without coercing malformed data."""
+    if type(raw) is not list or any(
+        type(key) is not str or not key.startswith("learned_")
+        or key != key.strip() or len(key) <= len("learned_")
+        for key in raw
+    ) or len(set(raw)) != len(raw):
+        raise ValueError("invalid_learned_control_aliases")
+    return tuple(raw)
 
 
 def _resolve_capability_raw(

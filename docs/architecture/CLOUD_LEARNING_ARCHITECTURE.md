@@ -3,6 +3,23 @@
 Cloud learning is an optional evidence workflow. It is not a runtime telemetry
 transport and it never makes cloud data authoritative over local registers.
 
+## Reviewed learned-control promotion
+
+An exact-model builtin capability can declare `learned_control_aliases` for
+reviewed legacy learned keys. The coordinator retains the original device-scoped
+capability instead of adding a duplicate builtin only when the explicit alias
+is unambiguous and the supported scalar Modbus SMG read/write contract matches:
+register, encoding, normalized function, scaling, bounds, step, readback and
+runtime constraints. A register match alone never grants equivalence. Other
+drivers, commands, enums and bitfields are not covered by this rule.
+
+The original learned key, value key, exposure policy and selection remain
+authoritative. Excluded learned controls also suppress their reviewed equivalent
+so Full Control cannot bypass a saved exclusion. Both runtime binding and
+platform setup use the coordinator overlay boundary. This is an in-memory merge,
+not an on-disk overlay rewrite or a device operation; it does not promote the
+learned write to tested or switch the runtime register schema.
+
 ## Ordinary active-learning HTTPS lifetime
 
 SmartESS and DESSMonitor active correlation providers own one `CloudHttpSession`

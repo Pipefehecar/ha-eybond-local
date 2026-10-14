@@ -370,7 +370,8 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
         self.assertTrue(profile.capabilities)
         # The tester confirmed writes on 2026-07-05: the family-proven set is
         # tested (exposed in auto mode); the family's unverified extras stay
-        # untested (full-control only).
+        # untested (full-control only), as do the five newly captured numeric
+        # controls until individual physical write acceptance is confirmed.
         tested = {c.key for c in profile.capabilities if c.tested}
         untested = {c.key for c in profile.capabilities if not c.tested}
         self.assertIn("output_source_priority", tested)
@@ -387,6 +388,11 @@ class CompiledDeviceCatalogCorpusTest(unittest.TestCase):
                 "power_saving_mode",
                 "remote_shutdown",
                 "remote_turn_on",
+                "low_dc_protection_soc_ac_mode",
+                "low_dc_recovery_soc_ac_mode",
+                "op1_offgrid_soc_protection",
+                "battery_low_cutoff_soc",
+                "max_discharge_current_protection",
             },
         )
 

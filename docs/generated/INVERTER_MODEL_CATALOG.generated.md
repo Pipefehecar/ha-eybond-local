@@ -282,7 +282,7 @@ Runtime descriptors with no specific commercial model record. These are generic 
     - `aninerel_anl_4200t_24l_w_pro` → surface `aninerel_anl_4200t_24l_w_pro_full` (driver modbus_smg, variant aninerel_anl_4200t_24l_w_pro)
       - Protocol: modbus_smg | Detection: fingerprint (layout 11, model 30723, rated 4200)
       - Tier: full | Read-only: no | Profile: modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json | Schema: modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json
-      - Capabilities: 30 (tested 22, untested 8); support tiers: conditional 21, standard 9 | Telemetry: 100 measurements, 18 binary sensors
+      - Capabilities: 35 (tested 22, untested 13); support tiers: conditional 26, standard 9 | Telemetry: 100 measurements, 18 binary sensors
 - Known limitations:
   - Battery-voltage setpoint limits for this model are undocumented, so the setpoint windows are deliberately wide and rely on the inverter's own write validation.
   - The full control surface is not yet reflected as a hardware-write-validated catalog assertion (validation.controls stays partial pending a backing write-validation source).

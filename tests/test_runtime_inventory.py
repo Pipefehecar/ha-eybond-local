@@ -54,13 +54,15 @@ class RuntimeInventoryTests(unittest.TestCase):
 
         self.assertEqual(summary["profiles"], len(inventory["profiles"]))
         self.assertEqual(summary["profiles"], 32)
-        self.assertEqual(summary["capabilities"], 1209)
+        self.assertEqual(summary["capabilities"], 1214)
         # The separate PV3300 surface adds 27 controls: four owner-confirmed,
         # 23 untested. The common MUST surface remains wholly untested.
-        self.assertEqual(summary["validation_state_counts"], {"tested": 438, "untested": 771})
+        # Exact Aninerel promotion adds five conditional, untested controls;
+        # existing tested counts and all other model profiles stay unchanged.
+        self.assertEqual(summary["validation_state_counts"], {"tested": 438, "untested": 776})
         self.assertEqual(
             summary["support_tier_counts"],
-            {"blocked": 31, "conditional": 799, "standard": 379},
+            {"blocked": 31, "conditional": 804, "standard": 379},
         )
 
         profile_by_key = {item["profile_key"]: item for item in inventory["profiles"]}

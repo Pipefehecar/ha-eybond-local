@@ -246,6 +246,19 @@ This is called a device-scoped learned overlay:
 
 For the model to become supported for everyone, the learned result still needs review and catalog work.
 
+When a reviewed control is added to the built-in catalog with an explicit
+equivalent learned mapping, your existing learned entity keeps its ID, custom
+name and saved selection. You do not need to repeat learning or recreate
+automations. An item you excluded during learning is not silently enabled by
+the new built-in equivalent. Matching a register address alone is not enough
+for this preservation rule.
+
+For Aninerel ANL-4200T-24L-W-PRO, the four additional SOC thresholds and maximum
+discharge-current protection are available in **Full Control** without learning.
+They remain **untested**; already activated equivalent learned controls retain
+their existing activation rules. No model-specific range is assumed when the
+capture did not provide one.
+
 ## Sharing the result
 
 If you are helping add support for a model:

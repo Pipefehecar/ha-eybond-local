@@ -1,7 +1,7 @@
 {
   "extends": "../protocols/classic_smg_rs232_v1.json",
   "profile_key": "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json",
-  "title": "Aninerel ANL-4200T-24L-W-PRO (tested controls, unvalidated voltage windows)",
+  "title": "Aninerel ANL-4200T-24L-W-PRO (tested base controls, untested extensions)",
   "driver_key": "modbus_smg",
   "protocol_family": "modbus_smg",
   "capability_defaults": {
@@ -160,6 +160,86 @@
     {
       "key": "battery_equalization_interval",
       "tested": true
+    },
+    {
+      "key": "low_dc_protection_soc_ac_mode",
+      "title": "Low DC Protection SOC in AC Mode",
+      "register": 341,
+      "value_kind": "u16",
+      "write_function": 16,
+      "group": "battery",
+      "unit": "%",
+      "tested": false,
+      "provenance": "inferred",
+      "support_tier": "conditional",
+      "enabled_default": true,
+      "learned_control_aliases": ["learned_bat_eybond_read_83_341"],
+      "note": "Exact-model SmartESS capture: FC16, one unsigned word. No undocumented setpoint limits are imposed.",
+      "support_notes": "Issue #60, layout 11/model 0x7803: intercepted cloud command and metadata; physical write acceptance remains untested."
+    },
+    {
+      "key": "low_dc_recovery_soc_ac_mode",
+      "title": "Low DC Recovery SOC in AC Mode",
+      "register": 342,
+      "value_kind": "u16",
+      "write_function": 16,
+      "group": "battery",
+      "unit": "%",
+      "tested": false,
+      "provenance": "inferred",
+      "support_tier": "conditional",
+      "enabled_default": true,
+      "learned_control_aliases": ["learned_bat_eybond_read_84_342"],
+      "note": "Exact-model SmartESS capture: FC16, one unsigned word. No undocumented setpoint limits are imposed.",
+      "support_notes": "Issue #60, layout 11/model 0x7803: intercepted cloud command and metadata; physical write acceptance remains untested."
+    },
+    {
+      "key": "op1_offgrid_soc_protection",
+      "title": "OP1 SOC Protection in Off-grid Mode",
+      "register": 343,
+      "value_kind": "u16",
+      "write_function": 16,
+      "group": "battery",
+      "unit": "%",
+      "tested": false,
+      "provenance": "inferred",
+      "support_tier": "conditional",
+      "enabled_default": true,
+      "learned_control_aliases": ["learned_bat_eybond_read_85_343"],
+      "note": "This model labels register 343 as OP1 protection, not battery low cutoff. FC16, one unsigned word; no inferred range.",
+      "support_notes": "Issue #60 exact-model cloud correlation. Physical write acceptance remains untested."
+    },
+    {
+      "key": "battery_low_cutoff_soc",
+      "title": "Battery Low Cutoff SOC",
+      "register": 344,
+      "value_kind": "u16",
+      "write_function": 16,
+      "group": "battery",
+      "unit": "%",
+      "tested": false,
+      "provenance": "inferred",
+      "support_tier": "conditional",
+      "enabled_default": true,
+      "learned_control_aliases": ["learned_bat_eybond_read_86_344"],
+      "note": "This model's battery low cutoff is register 344. FC16, one unsigned word; no inferred range.",
+      "support_notes": "Issue #60 exact-model cloud correlation. Physical write acceptance remains untested."
+    },
+    {
+      "key": "max_discharge_current_protection",
+      "title": "Maximum Discharge Current Protection",
+      "register": 351,
+      "value_kind": "u16",
+      "write_function": 16,
+      "group": "battery",
+      "unit": "A",
+      "tested": false,
+      "provenance": "inferred",
+      "support_tier": "conditional",
+      "enabled_default": true,
+      "learned_control_aliases": ["learned_bat_eybond_read_87_351"],
+      "note": "Exact-model SmartESS capture: FC16, one unsigned word. No undocumented current limit is imposed.",
+      "support_notes": "Issue #60 exact-model cloud correlation. Physical write acceptance remains untested."
     }
   ]
 }

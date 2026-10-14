@@ -245,6 +245,9 @@ class WriteCapability:
     # Whether normal polling may add a dedicated read solely to project this
     # capability's value. Exact write confirmation is independent of this flag.
     poll_readback: bool = True
+    # Explicit legacy learned keys for a reviewed builtin promotion. These are
+    # presentation aliases, never permission to change a write contract.
+    learned_control_aliases: tuple[str, ...] = ()
 
     @property
     def value_key(self) -> str:
