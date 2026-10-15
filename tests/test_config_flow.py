@@ -10046,6 +10046,8 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 artifact = coordinator.published[-1]["orchestration"]
                 self.assertEqual(artifact["failure"], {
                     "reason": "control_discovery_failure_generic",
+                    "primary_failure_reason": "control_discovery_failure_generic",
+                    "recovery_pending": False,
                     "learning_source": "smartclient", "stage": "building",
                     "exception_category": "ValueError",
                 })
@@ -10055,6 +10057,45 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("cloud-secret", str(coordinator.published) + str(logs.output))
                 self.assertEqual(coordinator.started, [])
                 self.assertEqual(coordinator.stopped, [])
+
+    async def test_valuecloud_failure_survives_failed_endpoint_recovery(self) -> None:
+        from custom_components.eybond_local.valuecloud_cloud import ValueCloudError
+        from custom_components.eybond_local.support.cloud_api_adapters import ValueCloudApiAdapter
+
+        coordinator = self._RunnerCoordinator(ready=False)
+        options = self._runner_options_flow(coordinator)
+        options._shadow_learning_state.update({
+            "wizard_source": "valuecloud", "progress": {"stage": "testing"},
+        })
+        error = ValueCloudError('private-secret', stage='control', reason_code='http_error', http_status=502)
+        error.delivery_sequence = 0
+        error.delivery_total = 57
+        error.delivery_duration_ms = 15023
+
+        async def failed_restore(_coordinator):
+            options._shadow_learning_state['session'] = {'status': 'restore_failed'}
+
+        with (
+            patch.object(options, '_async_execute_control_discovery', new=AsyncMock(side_effect=error)),
+            patch.object(options, '_control_discovery_requires_shadow_route', return_value=True),
+            patch.object(options, '_control_discovery_learning_engine', return_value=ValueCloudApiAdapter()),
+            patch.object(options, '_async_control_discovery_failsafe_stop', new=failed_restore),
+            self.assertLogs('custom_components.eybond_local.flows.options.shadow_run', level='ERROR') as logs,
+        ):
+            await options._async_run_control_discovery()
+        failure = coordinator.published[-1]['orchestration']['failure']
+        self.assertEqual(failure['reason'], 'shadow_learning_restore_pending')
+        self.assertEqual(failure['primary_failure_reason'],
+                         options._control_discovery_failure_reason(error, cloud_error_code='unavailable'))
+        self.assertNotEqual(failure['primary_failure_reason'], failure['reason'])
+        self.assertTrue(failure['recovery_pending'])
+        self.assertEqual(failure['http_status'], 502)
+        self.assertEqual(failure['request_stage'], 'control')
+        self.assertEqual(failure['provider_reason'], 'http_error')
+        self.assertEqual(failure['delivery_outcome'], 'indeterminate')
+        self.assertEqual(failure['sequence_index'], 0)
+        self.assertEqual(failure['planned_action_count'], 57)
+        self.assertNotIn('private-secret', str(coordinator.published) + str(logs.output))
 
     async def test_dessmonitor_runner_records_typed_local_semantic_coverage(self) -> None:
         coordinator = self._RunnerCoordinator(ready=False)

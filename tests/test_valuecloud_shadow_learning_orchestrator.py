@@ -21,6 +21,7 @@ from custom_components.eybond_local.support.shadow_learning.valuecloud_orchestra
 from custom_components.eybond_local.valuecloud_cloud import (  # noqa: E402
     ValueCloudActionRejectedError,
     ValueCloudEnvelope,
+    ValueCloudError,
     ValueCloudSession,
 )
 
@@ -516,6 +517,35 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
             409,
         )
         self.assertNotIn("error", result["results"][0])
+
+    def test_typed_indeterminate_delivery_retains_numeric_context(self) -> None:
+        calls = []
+        error = ValueCloudError('private-detail', stage='control', reason_code='timeout')
+
+        def fail(**kwargs):
+            calls.append(kwargs)
+            raise error
+
+        with self.assertRaises(ValueCloudError) as raised:
+            asyncio.run(async_orchestrate_valuecloud_shadow_learning(
+                batch_control=_batch_control(),
+                session=ValueCloudSession(token='token', secret='secret'),
+                pn='I200', sn='DEV1', devcode=2506, devaddr=1,
+                dry_run=False, confirm_cloud_write=True,
+                shadow_session_state='ready', continue_on_error=True,
+                field_ids=[],
+                is_session_ready=lambda: True, setup_action=fail,
+            ))
+        self.assertIs(raised.exception, error)
+        self.assertEqual(len(calls), 1)
+        diagnostics = error.safe_diagnostics()
+        self.assertEqual(diagnostics['delivery_outcome'], 'indeterminate')
+        self.assertEqual(diagnostics['sequence_index'], 0)
+        self.assertGreater(diagnostics['planned_action_count'], 0)
+        self.assertGreaterEqual(diagnostics['cloud_duration_ms'], 0)
+        self.assertNotIn('private-detail', str(diagnostics))
+        self.assertNotIn('field_id', diagnostics)
+        self.assertNotIn('requested_value', diagnostics)
 
     def test_indeterminate_delivery_aborts_before_next_action(self) -> None:
         calls = 0

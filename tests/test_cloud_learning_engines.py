@@ -390,6 +390,16 @@ class CloudLearningModelTests(unittest.TestCase):
             "unexpected",
         )
 
+    def test_error_evidence_is_owned_by_the_selected_provider(self) -> None:
+        from custom_components.eybond_local.valuecloud_cloud import ValueCloudError
+
+        error = ValueCloudError("private-token", stage="control", reason_code="timeout")
+        self.assertEqual(ValueCloudCloudLearningEngine().error_diagnostics(error), {
+            "request_stage": "control", "provider_reason": "timeout",
+        })
+        self.assertEqual(SmartEssCloudLearningEngine().error_diagnostics(error), {})
+        self.assertEqual(ValueCloudCloudLearningEngine().error_diagnostics(ValueError("private-token")), {})
+
     def test_selection_is_explicit_and_typed(self) -> None:
         smartess = CloudLearningSelection(
             method_id=LEARNING_METHOD_ACTIVE_CORRELATION,

@@ -732,22 +732,26 @@ class ShadowLearningRunMixin:
             progress = dict(self._shadow_learning_state.get("progress") or {})
             source_id = self._control_discovery_learning_source(coordinator)
             cloud_error_code = ""
+            provider_diagnostics = {}
             if str(progress.get("stage") or "") in {"fetching", "testing"}:
-                cloud_error_code = self._control_discovery_learning_engine(
-                    coordinator
-                ).classify_error(exc)
+                engine = self._control_discovery_learning_engine(coordinator)
+                cloud_error_code = engine.classify_error(exc)
+                provider_diagnostics = engine.error_diagnostics(exc)
             failure_reason = self._control_discovery_failure_reason(
                 exc,
                 cloud_error_code=cloud_error_code,
             )
-            request_stage = str(getattr(exc, "stage", "") or "unknown")
-            provider_reason = str(
-                getattr(exc, "reason_code", "") or "unknown"
+            primary_failure_reason = failure_reason
+            request_stage = provider_diagnostics.get(
+                "request_stage", str(getattr(exc, "stage", "") or "unknown")
+            )
+            provider_reason = provider_diagnostics.get(
+                "provider_reason", str(getattr(exc, "reason_code", "") or "unknown")
             )
             logger.error(
                 "Control discovery failed entry=%s source=%s stage=%s "
                 "request_stage=%s provider_reason=%s exception_type=%s "
-                "cloud_error_code=%s failure_reason=%s",
+                "cloud_error_code=%s failure_reason=%s http_status=%s",
                 getattr(self._config_entry, "entry_id", ""),
                 source_id,
                 str(progress.get("stage") or "unknown"),
@@ -756,7 +760,9 @@ class ShadowLearningRunMixin:
                 type(exc).__name__,
                 cloud_error_code or "not_cloud_classified",
                 failure_reason,
+                provider_diagnostics.get("http_status", "unknown"),
             )
+            recovery_pending = False
             if self._control_discovery_requires_shadow_route(coordinator):
                 await self._async_control_discovery_failsafe_stop(coordinator)
                 session = self._shadow_learning_state.get("session") or {}
@@ -765,6 +771,7 @@ class ShadowLearningRunMixin:
                     or session.get("restore_confirmed") is False
                     or session.get("status") in {"restore_failed", "restore_unconfirmed"}
                 ):
+                    recovery_pending = True
                     failure_reason = "shadow_learning_restore_pending"
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
@@ -773,6 +780,9 @@ class ShadowLearningRunMixin:
                 # the Core log. Never persist exception text, request URLs or
                 # arbitrary provider attributes (which may contain credentials).
                 "diagnostics": {
+                    "primary_failure_reason": primary_failure_reason,
+                    "recovery_pending": recovery_pending,
+                    **provider_diagnostics,
                     "learning_source": source_id,
                     "stage": str(progress.get("stage") or "unknown"),
                     "exception_category": next(

@@ -320,6 +320,14 @@ not whether the manufacturer's cloud is currently updating its data.
 Start another active check only after restoration is confirmed. If recovery
 keeps failing, create a Support Archive and share it with the maintainer.
 
+For ValueCloud, the Support Archive distinguishes HTTP, network, timeout and
+invalid-response failures, and keeps the original learning failure separately
+from an unconfirmed endpoint recovery. A failed control request may have reached
+the cloud even if its reply was lost; it is not automatically sent again. These
+diagnostics record the request stage and test-command index, not credentials or
+the HTTP response body. An unknown cloud error alone does not establish that
+your password is incorrect.
+
 Common causes:
 
 - The cloud/app username or password was rejected.

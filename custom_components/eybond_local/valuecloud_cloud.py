@@ -28,6 +28,47 @@ VALUECLOUD_QUERY_CTRL_FIELD_KEY_PATH = "ppe/api/auth/web/queryCtrlFieldKey"
 class ValueCloudError(RuntimeError):
     """Raised when one ValueCloud cloud request fails."""
 
+    def __init__(
+        self, message: str, *, stage: str = "unknown",
+        reason_code: str = "unknown", http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.reason_code = reason_code
+        self.http_status = http_status
+        self.delivery_sequence: int | None = None
+        self.delivery_total: int | None = None
+        self.delivery_duration_ms: int | None = None
+
+    def safe_diagnostics(self) -> dict[str, Any]:
+        """Export closed vocabulary only, never exception text or response data."""
+
+        result: dict[str, Any] = {
+            "request_stage": self.stage if type(self.stage) is str and self.stage in {
+                "login", "control", "metadata", "request",
+            } else "unknown",
+            "provider_reason": self.reason_code if type(self.reason_code) is str and self.reason_code in {
+                "http_error", "network", "timeout", "invalid_json",
+                "invalid_envelope", "rejected", "missing_credentials",
+                "missing_session",
+            } else "unknown",
+        }
+        if type(self.http_status) is int and 100 <= self.http_status <= 599:
+            result["http_status"] = self.http_status
+        if (
+            type(self.delivery_sequence) is int
+            and type(self.delivery_total) is int
+            and 0 <= self.delivery_sequence < self.delivery_total
+        ):
+            result.update(
+                delivery_outcome="indeterminate",
+                sequence_index=self.delivery_sequence,
+                planned_action_count=self.delivery_total,
+            )
+            if type(self.delivery_duration_ms) is int and self.delivery_duration_ms >= 0:
+                result["cloud_duration_ms"] = self.delivery_duration_ms
+        return result
+
 
 class ValueCloudActionRejectedError(ValueCloudError):
     """A completed ValueCloud action request with a definitive rejection."""
@@ -38,7 +79,10 @@ class ValueCloudActionRejectedError(ValueCloudError):
         self.detail = str(detail)
         normalized_code: int | str = code if code is not None else "unknown"
         super().__init__(
-            f"action_failed:{normalized_code}:{self.action}:{self.detail}"
+            f"action_failed:{normalized_code}",
+            stage=("login" if action == LOGIN_PATH else "control"
+                   if action in {"setUp", "ctrlDevice"} else "metadata"),
+            reason_code="rejected",
         )
 
 
@@ -147,6 +191,12 @@ def _http_json(
     app_version: str = DEFAULT_APP_VERSION,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> ValueCloudEnvelope:
+    stage = (
+        "login" if path == LOGIN_PATH
+        else "control" if path in {VALUECLOUD_BATCH_SETUP_PATH, VALUECLOUD_CTRL_DEVICE_PATH}
+        else "metadata" if method.upper() == "GET"
+        else "request"
+    )
     url = _url_for_path(base_url, path, params)
     data = None
     if body is not None:
@@ -167,17 +217,29 @@ def _http_json(
             payload = _decode_response_body(response.read())
             response_headers = dict(response.headers.items())
     except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise ValueCloudError(f"http_error:{exc.code}:{detail}") from exc
+        status = exc.code
+        exc.close()
+        raise ValueCloudError(
+            "http_error", stage=stage, reason_code="http_error", http_status=status,
+        ) from None
     except URLError as exc:
-        raise ValueCloudError(f"network_error:{exc.reason}") from exc
+        reason = "timeout" if isinstance(exc.reason, TimeoutError) else "network"
+        raise ValueCloudError(reason, stage=stage, reason_code=reason) from None
+    except TimeoutError:
+        raise ValueCloudError("timeout", stage=stage, reason_code="timeout") from None
+    except OSError:
+        raise ValueCloudError("network", stage=stage, reason_code="network") from None
 
     try:
         raw = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise ValueCloudError(f"invalid_json:{payload[:200]}") from exc
+    except json.JSONDecodeError:
+        raise ValueCloudError(
+            "invalid_json", stage=stage, reason_code="invalid_json",
+        ) from None
     if not isinstance(raw, dict):
-        raise ValueCloudError("invalid_envelope:not_an_object")
+        raise ValueCloudError(
+            "invalid_envelope", stage=stage, reason_code="invalid_envelope",
+        )
 
     return ValueCloudEnvelope(
         code=_maybe_int(raw.get("code")),
@@ -238,7 +300,9 @@ def login_with_password(
 
     account = _clean(username)
     if not account or not password:
-        raise ValueCloudError("login_failed:missing_credentials")
+        raise ValueCloudError(
+            "login_failed:missing_credentials", stage="login", reason_code="missing_credentials",
+        )
 
     body = {
         "account": account,
@@ -258,8 +322,8 @@ def login_with_password(
     )
     try:
         _raise_for_envelope(envelope, action=LOGIN_PATH)
-    except ValueCloudError as exc:
-        raise ValueCloudError(f"login_failed:{exc}") from exc
+    except ValueCloudError:
+        raise ValueCloudError("login_failed", stage="login", reason_code="rejected") from None
     session = _session_from_login(envelope, account=account, source_endpoint=LOGIN_PATH)
     return envelope, session
 
@@ -271,13 +335,13 @@ def _session_from_login(
     source_endpoint: str,
 ) -> ValueCloudSession:
     if not isinstance(envelope.data, dict):
-        raise ValueCloudError("login_failed:missing_data")
+        raise ValueCloudError("login_failed:missing_data", stage="login", reason_code="missing_session")
     token = _clean(envelope.data.get("token"))
     secret = _clean(envelope.data.get("secret"))
     auth = _clean(envelope.data.get("auth")) or _clean(envelope.headers.get("Auth"))
     user_id = _clean(envelope.data.get("userId")) or _clean(envelope.data.get("uid"))
     if not token or not secret:
-        raise ValueCloudError("login_failed:missing_token_or_secret")
+        raise ValueCloudError("login_failed:missing_token_or_secret", stage="login", reason_code="missing_session")
     return ValueCloudSession(
         token=token,
         secret=secret,

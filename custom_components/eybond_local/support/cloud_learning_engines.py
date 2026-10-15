@@ -69,6 +69,9 @@ class CloudLearningEngine(ABC):
     def classify_error(self, exc: BaseException) -> str:
         return self.adapter.classify_error(exc)
 
+    def error_diagnostics(self, exc: BaseException) -> dict[str, object]:
+        return self.adapter.error_diagnostics(exc)
+
 
 class SmartEssCloudLearningEngine(CloudLearningEngine):
     adapter = SmartEssCloudApiAdapter()

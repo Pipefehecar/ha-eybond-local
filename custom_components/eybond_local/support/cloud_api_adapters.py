@@ -7,6 +7,7 @@ from abc import ABC
 from ..dessmonitor_cloud import DessMonitorCloudError
 from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from ..smartclient_cloud import SmartClientCloudError
+from ..valuecloud_cloud import ValueCloudError
 from .cloud_learning_models import CloudApiCapabilities, CloudApiSource
 
 
@@ -28,6 +29,11 @@ class CloudApiAdapter(ABC):
         """Return a stable source-owned error code, or empty if unrelated."""
 
         return ""
+
+    def error_diagnostics(self, exc: BaseException) -> dict[str, object]:
+        """Return source-owned, privacy-safe failure evidence only."""
+
+        return {}
 
 
 class SmartEssCloudApiAdapter(CloudApiAdapter):
@@ -63,6 +69,31 @@ class ValueCloudApiAdapter(CloudApiAdapter):
             history=False,
         ),
     )
+
+    def classify_error(self, exc: BaseException) -> str:
+        if not isinstance(exc, ValueCloudError):
+            return ""
+        diagnostics = exc.safe_diagnostics()
+        reason = diagnostics["provider_reason"]
+        status = diagnostics.get("http_status")
+        if status in {401, 403}:
+            # The existing UI's auth message explicitly says login failed.
+            # A later control denial can instead concern permissions/session
+            # expiry, even though the original credentials were accepted.
+            return "auth_failed" if diagnostics["request_stage"] == "login" else "unexpected"
+        if status == 429:
+            return "rate_limited"
+        if reason in {"network", "timeout"}:
+            return reason
+        if reason in {"invalid_json", "invalid_envelope"} or (
+            type(status) is int and status >= 500
+        ):
+            return "unavailable"
+        # An undocumented login/control rejection is not proof of bad credentials.
+        return "unexpected"
+
+    def error_diagnostics(self, exc: BaseException) -> dict[str, object]:
+        return exc.safe_diagnostics() if isinstance(exc, ValueCloudError) else {}
 
 
 class DessMonitorCloudApiAdapter(CloudApiAdapter):

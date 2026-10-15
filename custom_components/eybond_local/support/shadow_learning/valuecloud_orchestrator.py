@@ -254,12 +254,19 @@ async def async_orchestrate_valuecloud_shadow_learning(
                 "detail": exc.detail,
             }
         except Exception as exc:
+            duration_ms = _elapsed_ms(dispatch_started)
+            if isinstance(exc, ValueCloudError):
+                # Preserve only locally-owned numeric context. Never replay an
+                # action whose HTTP response did not establish its outcome.
+                exc.delivery_sequence = sequence_index
+                exc.delivery_total = plan_total
+                exc.delivery_duration_ms = duration_ms
             logger.warning(
                 "Shadow cloud action delivery indeterminate sequence=%s total=%s "
                 "duration_ms=%s exception_type=%s",
                 sequence_index,
                 plan_total,
-                _elapsed_ms(dispatch_started),
+                duration_ms,
                 type(exc).__name__,
             )
             raise
