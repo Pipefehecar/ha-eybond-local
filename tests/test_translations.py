@@ -52,6 +52,15 @@ CONTROL_DISCOVERY_FAILURE_KEYS = (
 
 
 class TranslationShapeTests(unittest.TestCase):
+    def test_learning_failure_copy_does_not_claim_cloud_restoration(self) -> None:
+        for path in FLOW_TRANSLATION_FILES:
+            with self.subTest(path=path.name):
+                dynamic = json.loads(path.read_text(encoding="utf-8"))["common"]["dynamic"]
+                for key in ("control_discovery_route_dropped", "control_discovery_failure_generic"):
+                    text = dynamic[key]
+                    for false_claim in ("restored the collector", "відновив підключення", "восстановил подключение"):
+                        self.assertNotIn(false_claim, text)
+
     def test_option_flow_errors_are_declared_at_options_error_level(self) -> None:
         for path in TRANSLATION_FILES:
             with self.subTest(path=path.name):
@@ -153,21 +162,21 @@ class TranslationShapeTests(unittest.TestCase):
                 )
 
     def test_active_learning_consent_names_the_complete_endpoint_transaction(self) -> None:
-        """Consent covers routing, cloud commands, interception, and restore."""
+        """Consent covers routing, interception and the non-expiring cloud hold."""
 
         markers = {
-            "en": ("endpoint", "test commands", "capture and block", "restores"),
+            "en": ("endpoint", "test commands", "capture and block", "stays local"),
             "ru": (
                 "endpoint",
                 "тестовые команды",
                 "перехватить и заблокировать",
-                "восстановит",
+                "остаётся локальным",
             ),
             "uk": (
                 "endpoint",
                 "тестові команди",
                 "перехопити й заблокувати",
-                "відновить",
+                "залишається локальним",
             ),
         }
         for path in FLOW_TRANSLATION_FILES:
@@ -189,8 +198,10 @@ class TranslationShapeTests(unittest.TestCase):
                     "shadow_learning_confirm_cloud_write"
                 ]
                 self.assertIn(markers[language][1], label)
-                self.assertIn("endpoint", description)
                 self.assertIn(markers[language][1], description)
+                outage = consent["data_description"]["shadow_learning_confirm_cloud_outage"]
+                self.assertTrue(outage)
+                self.assertIn("shadow_learning_confirm_cloud_outage", consent["data"])
 
 
 class RecoveryFailureLocalizationTests(unittest.TestCase):

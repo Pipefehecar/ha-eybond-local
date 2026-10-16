@@ -24,6 +24,38 @@ class LinkConnectionMixin:
             self.collector_info.remote_ip or "unknown",
             self._collector_ip or "unknown",
         )
+        lease = self._route_lease
+        if lease is not None and self._domain_ownership_active():
+            # Primary + callback sockets can coexist. Closing only the facade's
+            # selected socket leaves the primary open, so it never redials into
+            # the new proxy. Drain a fixed baseline of strongly identified owned
+            # sockets; never close a new arrival or a same-IP foreign collector.
+            from ...connection.session_registry import SESSION_STATE_CLOSED
+
+            registry = self._callback_ownership_registry
+            entry = self._callback_entry_id
+            pn = registry.claimed_identity(entry)
+            if lease.entry_id != entry or lease.state != "running":
+                raise RuntimeError("collector_endpoint_operation_busy")
+
+            def owned(session):
+                return (session.owner_entry_id == entry and session.has_strong_identity
+                        and session.state != SESSION_STATE_CLOSED
+                        and pn_is_same_identity(session.collector_pn, pn))
+
+            baseline = tuple(s for s in registry.observed_sessions_per_socket() if owned(s))
+            for session in baseline:
+                def still_owned(session=session):
+                    return (self._route_lease is lease and registry.claimed_identity(entry) == pn
+                            and any(s.session_id == session.session_id
+                                    and s.listener_port == session.listener_port and owned(s)
+                                    for s in registry.observed_sessions_per_socket()))
+                for transport in self._payload_transports():
+                    await transport.async_disconnect_owned_session(
+                        session_id=session.session_id, listener_port=session.listener_port,
+                        owns_session=still_owned,
+                    )
+            return
         await self._disconnect_all_transports()
 
     async def _async_follow_owned_session_listener(self) -> None:
@@ -337,6 +369,16 @@ class LinkConnectionMixin:
                             baseline_session_ids=baseline,
                             deadline=deadline,
                             preferred_protocol=challenge,
+                        )
+                        logger.debug(
+                            "Runtime callback identity result=%s port=%d "
+                            "baseline=%d wire=%s source=%s probe=%s",
+                            result.status,
+                            probe_port,
+                            len(baseline),
+                            result.session_protocol or "unknown",
+                            result.identity_source or "none",
+                            result.probe_kind or "none",
                         )
                         if not result.identified:
                             # Candidate ordering is permission, never evidence.

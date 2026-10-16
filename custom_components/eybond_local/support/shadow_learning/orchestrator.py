@@ -138,8 +138,13 @@ def orchestrate_shadow_learning_settings(
             }
             attempt["dat"] = getattr(envelope, "dat", None)
         except SmartEssActionRejectedError as exc:
+            # Vendor ERR_TIMEOUT is no response after command dispatch, NOT a
+            # pre-dispatch rejection. Never advance to another test value.
+            if exc.err == 0x0002:
+                logger.warning("Shadow cloud command timed out: delivery indeterminate")
+                raise
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["delivery_outcome"] = "cloud_error_response"
             attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             attempt["cloud_rejection"] = {
                 "err": exc.err,
@@ -230,6 +235,7 @@ async def async_orchestrate_shadow_learning_settings(
     fetch_action: Callable[..., Any] = fetch_signed_action,
     http_session=None,
     on_progress: Callable[[int, int], None] | None = None,
+    dispatch_action: Callable[..., Awaitable[Any]] = async_dispatch_cloud_action,
 ) -> dict[str, Any]:
     """Plan and execute one SmartESS learn-settings run with async per-attempt observation correlation.
 
@@ -307,7 +313,7 @@ async def async_orchestrate_shadow_learning_settings(
         attempt["requested_at"] = utc_now_iso()
         dispatch_started = time.monotonic()
         try:
-            envelope = await async_dispatch_cloud_action(
+            envelope = await dispatch_action(
                 fetch_action,
                 action=action,
                 session=session,
@@ -328,13 +334,16 @@ async def async_orchestrate_shadow_learning_settings(
             }
             attempt["dat"] = getattr(envelope, "dat", None)
         except SmartEssActionRejectedError as exc:
+            if exc.err == 0x0002:
+                logger.warning("Shadow cloud command timed out: delivery indeterminate")
+                raise
             # In observe-only (exception) mode SmartESS rejects every write with
             # an expected NACK, yet the Modbus write is still delivered to the
             # shadow and observed. Keep correlating that observation instead of
             # skipping the attempt, so the delivered write maps to its cloud
             # field. A genuine non-delivery simply yields no observation.
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["delivery_outcome"] = "cloud_error_response"
             attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             attempt["cloud_rejection"] = {
                 "err": exc.err,
@@ -344,7 +353,7 @@ async def async_orchestrate_shadow_learning_settings(
             # The request may have reached SmartESS even though its terminal
             # result is unknown. Starting another action would allow a late
             # collector write to be attributed to the wrong field. Abort this
-            # run and let the flow restore the endpoint while the exact request
+            # run and let the lifecycle enforce recovery protection while the request
             # exception is still available for provider-owned classification.
             logger.warning(
                 "Shadow cloud action delivery indeterminate sequence=%s total=%s "

@@ -129,6 +129,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
     setup_action: Callable[..., ValueCloudEnvelope] = setup_batch_control_value,
     legacy_setup_action: Callable[..., ValueCloudEnvelope] = ctrl_device_value,
     on_progress: Callable[[int, int], None] | None = None,
+    dispatch_action: Callable[..., Awaitable[Any]] = async_dispatch_cloud_action,
 ) -> dict[str, Any]:
     """Run ValueCloud batch-control learning through the local shadow proxy."""
 
@@ -202,7 +203,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
         dispatch_started = time.monotonic()
         try:
             if item.get("transport") == "legacy_ctrlDevice":
-                envelope = await async_dispatch_cloud_action(
+                envelope = await dispatch_action(
                     legacy_setup_action,
                     session=session,
                     pn=pn,
@@ -218,7 +219,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
                     timeout=timeout,
                 )
             else:
-                envelope = await async_dispatch_cloud_action(
+                envelope = await dispatch_action(
                     setup_action,
                     session=session,
                     pn=pn,
@@ -246,7 +247,7 @@ async def async_orchestrate_valuecloud_shadow_learning(
             }
         except ValueCloudActionRejectedError as exc:
             attempt["status"] = _CONTROL_STATUS_ERROR
-            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["delivery_outcome"] = "cloud_error_response"
             attempt["cloud_duration_ms"] = _elapsed_ms(dispatch_started)
             attempt["cloud_rejection"] = {
                 "code": exc.code,

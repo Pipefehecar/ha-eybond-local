@@ -14,7 +14,9 @@ from ...collector.collector_wire import (
 )
 from ..cloud_session_wire import consume_cloud_message
 from ..collector_cloud_proxy import JsonLineWriter
+from ..owned_worker import async_finish_owned_task
 from .backend import InProcessShadowLearningHandler, ShadowLearningSeed, utc_now_iso
+from .identity import async_verify_shadow_socket
 
 
 _COLLECTOR_FORWARD_FCODES = frozenset({1, 2, 3, 22, 23, 24, 31, 32, 50})
@@ -60,6 +62,21 @@ def route_status_indicates_control_write_ready(status: dict[str, Any]) -> bool:
     return bool(status.get("ready") or status.get("upstream_connected"))
 
 
+def route_status_has_verified_identity(status: dict[str, Any], collector_pn: str) -> bool:
+    """Require a fresh exact-PN challenge on the current attached socket.
+
+    Does not replace permanent endpoint recovery proof or the durable hold.
+    """
+
+    return (
+        route_status_indicates_control_ready(status)
+        and status.get("running") is True
+        and not status.get("upstream_error")
+        and status.get("collector_identity_verified") is True
+        and status.get("collector_identity_pn") == collector_pn
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _PendingCollectorRequest:
     tid: int
@@ -79,6 +96,7 @@ class InProcessFailClosedShadowProxyHandler:
         upstream_port: int,
         seed: ShadowLearningSeed,
         output_path: Path,
+        expected_session_protocol: str = "",
     ) -> None:
         self._upstream_host = str(upstream_host)
         self._upstream_port = int(upstream_port)
@@ -93,6 +111,9 @@ class InProcessFailClosedShadowProxyHandler:
         self._route_protocol_activity = False
         self._upstream_connected = False
         self._last_error = ""
+        self._expected_session_protocol = expected_session_protocol
+        self._collector_pn = seed.collector_pn
+        self._identity_verified = False
         self._backend = InProcessShadowLearningHandler(seed=seed, output_path=output_path)
 
     @property
@@ -148,6 +169,8 @@ class InProcessFailClosedShadowProxyHandler:
             "upstream_connected": self._upstream_connected,
             "ready": self.ready,
             "upstream_error": self._last_error,
+            "collector_identity_verified": self._identity_verified,
+            "collector_identity_pn": self._collector_pn if self._identity_verified else "",
         }
 
     def observation_cursor(self) -> int:
@@ -233,7 +256,9 @@ class InProcessFailClosedShadowProxyHandler:
     ) -> None:
         """Proxy one collector callback with cloud fail-closed interception policy."""
 
-        if not self._running:
+        # Only one socket may own this handler's identity and readiness. A
+        # second NAT peer must not replace it or have its finally clear it.
+        if not self._running or self._tasks:
             collector_writer.close()
             try:
                 await collector_writer.wait_closed()
@@ -244,6 +269,33 @@ class InProcessFailClosedShadowProxyHandler:
         current_task = asyncio.current_task()
         if current_task is not None:
             self._tasks.add(current_task)
+        self._identity_verified = False
+        self._route_protocol_activity = False
+        try:
+            await self._handle_client(collector_reader, collector_writer)
+        finally:
+            async def finish_client() -> None:
+                self._identity_verified = False
+                self._collector_connected = False
+                self._collector_protocol_ingress = False
+                self._route_protocol_activity = False
+                self._upstream_connected = False
+                collector_writer.close()
+                try:
+                    async with asyncio.timeout(2.0):
+                        await collector_writer.wait_closed()
+                except (TimeoutError, ConnectionError):
+                    pass
+                finally:
+                    if current_task is not None:
+                        self._tasks.discard(current_task)
+
+            await async_finish_owned_task(asyncio.create_task(finish_client()))
+
+    async def _handle_client(
+        self, collector_reader: asyncio.StreamReader, collector_writer: asyncio.StreamWriter,
+    ) -> None:
+        """Own both pumps until drained; the wrapper owns the socket identity."""
 
         collector_peer = collector_writer.get_extra_info("peername") or ("", 0)
         remote = f"{collector_peer[0] or ''}:{collector_peer[1] or 0}"
@@ -252,6 +304,26 @@ class InProcessFailClosedShadowProxyHandler:
         self._collector_protocol_ingress = False
         self._upstream_connected = False
         self._last_error = ""
+
+        prelude = b""
+        if self._expected_session_protocol:
+            try:
+                source, prelude = await async_verify_shadow_socket(
+                    collector_reader, collector_writer,
+                    collector_pn=self._collector_pn,
+                    session_protocol=self._expected_session_protocol,
+                )
+            except Exception as exc:
+                self._last_error = str(exc)
+                await self._append_event(
+                    "shadow_proxy_identity_failed", "shadow_proxy",
+                    {"reason": self._last_error},
+                )
+                return
+            self._identity_verified = True
+            await self._append_event(
+                "shadow_proxy_identity_verified", "shadow_proxy", {"source": source},
+            )
 
         try:
             upstream_reader, upstream_writer = await asyncio.open_connection(
@@ -276,8 +348,6 @@ class InProcessFailClosedShadowProxyHandler:
                 await collector_writer.wait_closed()
             except Exception:
                 pass
-            if current_task is not None:
-                self._tasks.discard(current_task)
             return
         self._upstream_connected = True
 
@@ -287,19 +357,11 @@ class InProcessFailClosedShadowProxyHandler:
         upstream_write_lock = asyncio.Lock()
         collector_write_lock = asyncio.Lock()
 
-        await self._append_event(
-            "shadow_proxy_connected",
-            "shadow_proxy",
-            {
-                "remote": remote,
-                "upstream_host": self._upstream_host,
-                "upstream_port": self._upstream_port,
-            },
-        )
-
         async def _collector_to_cloud() -> None:
+            initial = prelude
             while True:
-                chunk = await collector_reader.read(4096)
+                chunk = initial or await collector_reader.read(4096)
+                initial = b""
                 if not chunk:
                     return
                 collector_buffer.extend(chunk)
@@ -543,39 +605,39 @@ class InProcessFailClosedShadowProxyHandler:
         collector_task = asyncio.create_task(_collector_to_cloud())
         cloud_task = asyncio.create_task(_cloud_to_collector())
         try:
-            done, pending = await asyncio.wait(
+            await self._append_event(
+                "shadow_proxy_connected", "shadow_proxy",
+                {"remote": remote, "upstream_host": self._upstream_host,
+                 "upstream_port": self._upstream_port},
+            )
+            await asyncio.wait(
                 {collector_task, cloud_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for task in pending:
-                task.cancel()
-            for task in done | pending:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
         finally:
+            # Invalidate permission BEFORE the first cleanup await. Cancellation
+            # of the parent must never leave pumps writing to a closed trace.
+            self._identity_verified = False
             self._collector_connected = False
             self._upstream_connected = False
-            await self._append_event(
-                "shadow_proxy_disconnected",
-                "shadow_proxy",
-                {"remote": remote},
-            )
-            try:
-                collector_writer.close()
-                await collector_writer.wait_closed()
-            except Exception:
-                pass
-            try:
-                upstream_writer.close()
-                await upstream_writer.wait_closed()
-            except Exception:
-                pass
-            if current_task is not None:
-                self._tasks.discard(current_task)
+
+            async def finish_pumps() -> None:
+                for task in (collector_task, cloud_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(collector_task, cloud_task, return_exceptions=True)
+                for writer in (collector_writer, upstream_writer):
+                    writer.close()
+                    try:
+                        async with asyncio.timeout(2.0):
+                            await writer.wait_closed()
+                    except (TimeoutError, ConnectionError):
+                        pass
+                await self._append_event(
+                    "shadow_proxy_disconnected", "shadow_proxy", {"remote": remote},
+                )
+
+            await async_finish_owned_task(asyncio.create_task(finish_pumps()))
 
     async def _append_event(self, kind: str, direction: str, payload: dict[str, Any]) -> None:
         writer = self._writer

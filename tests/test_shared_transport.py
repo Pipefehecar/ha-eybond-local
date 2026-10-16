@@ -276,6 +276,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         connection._writer = _FakeWriter()  # type: ignore[assignment]
         future = asyncio.get_running_loop().create_future()
         connection._pending_at_response = future
+        connection._pending_at_command = "DTUPN"
         reader = asyncio.StreamReader()
         reader.feed_data(b"AT+DTUPN:E50000200000000001\r\n")
         reader.feed_eof()
@@ -302,6 +303,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 connection._auxiliary_session.enabled = auxiliary_enabled
                 at_reply = asyncio.get_running_loop().create_future()
                 connection._pending_at_response = at_reply
+                connection._pending_at_command = "SYST"
                 replies = {}
                 for tid in (20, 21):
                     replies[tid] = asyncio.get_running_loop().create_future()
@@ -397,6 +399,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         at_future = asyncio.get_running_loop().create_future()
         framed_future = asyncio.get_running_loop().create_future()
         connection._pending_at_response = at_future
+        connection._pending_at_command = "INTPARA"
         # A long-running connection can have a transaction id whose two bytes
         # are printable. The decoder must preserve the complete binary header,
         # not merely the first control byte it happens to encounter later.
@@ -434,6 +437,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         )
         future = asyncio.get_running_loop().create_future()
         connection._pending_at_response = future
+        connection._pending_at_command = "INTPARA"
         reader = asyncio.StreamReader()
         task = asyncio.create_task(connection._read_loop(reader))
         try:
@@ -455,6 +459,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
         at_future = asyncio.get_running_loop().create_future()
         framed_future = asyncio.get_running_loop().create_future()
         connection._pending_response = at_future
+        connection._pending_at_command = "INTPARA"
         connection._pending_framed_response[32] = framed_future
         connection._pending_framed_fcode[32] = 2
         reader = asyncio.StreamReader()
@@ -1815,7 +1820,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 writer.write(
                     build_collector_request(
                         header.tid,
-                        b"OK",
+                        b"\x00\x05OK",
                         devcode=header.devcode,
                         collector_addr=header.devaddr,
                         fcode=header.fcode,
@@ -1839,7 +1844,7 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(transport.connected)
                 header, payload = await transport.async_send_collector(fcode=2, payload=b"\x05")
                 self.assertEqual(header.fcode, 2)
-                self.assertEqual(payload, b"OK")
+                self.assertEqual(payload, b"\x00\x05OK")
                 self.assertTrue(transport.connected)
             finally:
                 release_client.set()
@@ -3957,6 +3962,30 @@ class SharedTransportTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exact_parked_claim_never_falls_back_to_live_same_pn(self) -> None:
+        """A configured PN/IP cannot replace a new-session claim with its sibling."""
+        from unittest.mock import Mock
+
+        for cls, wire in ((SharedEybondTransport, "eybond_framed"),
+                          (SharedCollectorAtTransport, "eybond_framed"),
+                          (SharedCollectorAtTransport, "at_text")):
+            with self.subTest(transport=cls.__name__, wire=wire):
+                transport = cls(host="127.0.0.1", port=8899, request_timeout=.1,
+                                collector_ip="192.0.2.1", collector_pn="E50000200000000001",
+                                collector_session_protocol=wire,
+                                **({"heartbeat_interval": 3600} if cls is SharedEybondTransport else {}))
+                listener = Mock()
+                listener.payload_connection_for_session.return_value = None
+                listener.at_connection_for_session.return_value = None
+                sibling = Mock(connected=True)
+                listener.ensure_connection.return_value = sibling
+                listener.ensure_at_connection.return_value = sibling
+                transport._listener = listener
+                transport.set_claimed_session_provider(lambda: "new-parked")
+                self.assertFalse(transport.connected)
+                listener.ensure_connection.assert_not_called()
+                listener.ensure_at_connection.assert_not_called()
+
     def _heartbeat_frame(self) -> bytes:
         return build_collector_request(
             7,
@@ -4086,20 +4115,16 @@ class ParkedUnclaimedCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(first, placeholder)
         self.assertTrue(first.connected)
 
-        second_pending = listener._claim_pending_socket(
-            self._pending(
-                listener,
-                session_id="session-second",
-                remote_ip="192.168.1.55",
-            )
+        self._pending(listener, session_id="session-second", remote_ip="192.168.1.55")
+        transport = SharedEybondTransport(
+            host="127.0.0.1", port=listener._port, request_timeout=.5, heartbeat_interval=3600,
+            collector_ip="192.168.1.55", collector_pn=collector_pn,
         )
-        second = await listener.activate_pending_connection(
-            second_pending,
-            collector_ip="",
-            collector_pn=collector_pn,
-            heartbeat_interval=3600.0,
-            write_timeout=0.5,
-        )
+        transport._listener = listener
+        transport.set_claimed_session_provider(lambda: "session-second")
+        self.assertFalse(transport.connected)  # Older same-PN socket is still live.
+        self.assertTrue(await transport.wait_until_connected(timeout=.5))
+        second = listener.payload_connection_for_session("session-second")
 
         self.assertIsNot(second, first)
         self.assertIs(
@@ -4797,6 +4822,13 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
             expected_reason="collector_frame_header_timeout",
             header_timeout=0.05,
         )
+        # Own-bench protected retry: this raw-looking prefix on a framed
+        # primary socket must fail promptly, not wait for a guessed payload
+        # or silently authorize a different wire/session for learning.
+        await _run_failure(
+            bytes.fromhex("01030a0000000000"),
+            expected_reason="collector_frame_length_invalid",
+        )
         await _run_failure(
             build_collector_request(
                 1,
@@ -5073,8 +5105,21 @@ class TransportLifecycleHardeningTests(unittest.IsolatedAsyncioTestCase):
         session = listener.discovered_collector_sessions()[0]
         self.assertEqual(session["collector_pn"], "V001020SYN62344022")
         self.assertEqual(session["collector_identity_source"], "fc2_parameter_2")
-        self.assertEqual(session["state"], "route_identity_mismatch")
+        self.assertEqual(session["state"], "identified")
         self.assertTrue(listener._pending_socket_still_registered(pending))
+
+        # A different entry asking first must not invalidate the newly learned
+        # identity for its actual permanent owner on the same shared port/NAT.
+        from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
+        registry = CallbackSessionRegistry(
+            sessions_source=listener.discovered_collector_sessions,
+        )
+        registry.claim("actual-owner", collector_pn="V001020SYN62344022")
+        self.assertEqual(
+            registry.pin_owner_claim_to_current_observed_session("actual-owner"),
+            "s-weak",
+        )
+        self.assertIsNotNone(registry.certify_permanent_owned_session("actual-owner", "s-weak"))
 
         reader.feed_eof()
         await asyncio.wait_for(pending.sniff_task, timeout=2.0)

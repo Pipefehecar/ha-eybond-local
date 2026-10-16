@@ -29,6 +29,7 @@ from ...support.cloud_local_coverage import (
     CLOUD_LOCAL_STATUS_AVAILABLE_FRESH,
 )
 from ...support.cloud_history_evidence import CloudHistoryCollection
+from ...support.cloud_learning_models import LEARNING_METHOD_READ_ONLY_EVIDENCE
 from .shadow_metadata_review import (
     cloud_history_collection,
     cloud_history_summary,
@@ -502,6 +503,8 @@ class ShadowLearningReviewMixin:
         for key in self._CONTROL_DISCOVERY_RUN_STATE_KEYS:
             self._shadow_learning_state.pop(key, None)
         self._shadow_learning_state.pop("wizard_consent", None)
+        self._shadow_learning_state.pop("wizard_outage_consent", None)
+        self._shadow_learning_state.pop("protection_held", None)
         self._shadow_learning_state.pop("wizard_credentials", None)
         self._shadow_learning_state.pop("wizard_progress_task", None)
 
@@ -949,10 +952,11 @@ class ShadowLearningReviewMixin:
         # the success message — OR-ing it in here turned a successful-but-empty
         # run into a failure screen that printed the success text as the error.
         restore_pending = await self._async_control_discovery_restore_pending(coordinator)
-        if restore_pending:
-            self._shadow_learning_state["discovery"] = {
-                "status": "error", "reason": "shadow_learning_restore_pending",
-            }
+        protection_held = (
+            self._shadow_learning_state.get("protection_held") is True or
+            self._shadow_learning_state.get("discovery", {}).get("reason")
+            == "cloud_learning_protection_held"
+        )
         failed = self._control_discovery_failed()
         error_detail = self._control_discovery_error_detail() if failed else ""
         selected_count = self._control_discovery_enabled_selection_count()
@@ -1046,7 +1050,7 @@ class ShadowLearningReviewMixin:
                     )
                 else:
                     errors["base"] = error
-            elif action == CONTROL_DISCOVERY_RESULT_ACTION_RESTORE and restore_pending:
+            elif action == CONTROL_DISCOVERY_RESULT_ACTION_RESTORE and restore_pending and not protection_held:
                 if await self._async_control_discovery_retry_restore(coordinator):
                     restore_pending = False
                     error_detail = self._control_discovery_error_detail()
@@ -1064,7 +1068,7 @@ class ShadowLearningReviewMixin:
         # least one discovered control; on a failed run it is replaced by "Try the
         # scan again". Support + Return are always offered.
         action_options: list[SelectOptionDict] = []
-        if restore_pending:
+        if restore_pending and not protection_held:
             action_options.append(
                 SelectOptionDict(
                     value=CONTROL_DISCOVERY_RESULT_ACTION_RESTORE,
@@ -1084,12 +1088,13 @@ class ShadowLearningReviewMixin:
                     ),
                 )
             )
-        elif failed:
+        elif failed and (not protection_held or self._shadow_learning_state.get("protected_retry_available") is True):
             action_options.append(
                 SelectOptionDict(
                     value=CONTROL_DISCOVERY_RESULT_ACTION_RETRY,
                     label=self._tr(
-                        "common.dynamic.control_discovery_result_action_retry",
+                        ("common.dynamic.cloud_learning_protected_retry_action"
+                         if protection_held else "common.dynamic.control_discovery_result_action_retry"),
                         "Try the scan again",
                     ),
                 )
@@ -1130,8 +1135,12 @@ class ShadowLearningReviewMixin:
             else action_options[0]["value"]
         )
 
-        if restore_pending:
+        if restore_pending and not protection_held:
             body_key = "common.dynamic.shadow_learning_restore_pending"
+            body_default = error_detail
+            hint_placeholders = {}
+        elif protection_held:
+            body_key = "common.dynamic.cloud_learning_protection_held"
             body_default = error_detail
             hint_placeholders = {}
         elif controls:
@@ -1231,6 +1240,19 @@ class ShadowLearningReviewMixin:
             hint_placeholders=hint_placeholders,
             extra=hint_placeholders,
         )
+        if (
+            protection_held and failed and error_detail
+            and error_detail != placeholders.get("control_discovery_hint", "")
+            and (
+                self._shadow_learning_state.get("wizard_method") == LEARNING_METHOD_READ_ONLY_EVIDENCE
+                or self._shadow_learning_state.get("protected_retry_available") is True
+            )
+        ):
+            # A retained hold is not the cause of a provider/network failure.
+            # Keep both facts visible without relaxing any actions.
+            placeholders["control_discovery_hint"] = (
+                f"{error_detail}\n\n{placeholders.get('control_discovery_hint', '')}"
+            )
         if controls and read_count > 0:
             # Controls path already has its intro; note the learned reads too.
             read_line = self._tr(

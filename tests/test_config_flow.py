@@ -34,6 +34,18 @@ def _install_homeassistant_stubs() -> None:
     selector = types.ModuleType("homeassistant.helpers.selector")
     util = types.ModuleType("homeassistant.util")
     util_ulid = types.ModuleType("homeassistant.util.ulid")
+    setup = types.ModuleType("homeassistant.setup")
+
+    async def async_setup_component(hass, domain, _config):
+        # Unit flows do not run HA's loader or bind sockets. Model its registry
+        # publication; native-HA tests cover the real first-install bootstrap.
+        from custom_components.eybond_local.connection.session_registry import CallbackSessionRegistry
+        hass.data.setdefault(domain, {}).setdefault(
+            "callback_session_registry", CallbackSessionRegistry(sessions_source=lambda: ())
+        )
+        return True
+
+    setup.async_setup_component = async_setup_component
 
     _ulid_counter = itertools.count(1)
 
@@ -264,6 +276,7 @@ def _install_homeassistant_stubs() -> None:
 
     sys.modules["voluptuous"] = voluptuous
     sys.modules["homeassistant"] = ha
+    sys.modules["homeassistant.setup"] = setup
     sys.modules["homeassistant.config_entries"] = config_entries
     sys.modules["homeassistant.core"] = core
     sys.modules["homeassistant.data_entry_flow"] = data_entry_flow
@@ -755,7 +768,13 @@ def _stub_identity_wire(
 
     with patch.object(ci, "_ProductionTriggerSender", return_value=_Sender()), patch.object(
         ci, "_SessionPinnedIdentityReader", return_value=_Reader()
-    ), patch.object(ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()):
+    ), patch.object(ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()), patch(
+        "custom_components.eybond_local.collector.transport._acquire_shared_listener",
+        new=AsyncMock(return_value=object()),
+    ), patch(
+        "custom_components.eybond_local.collector.transport._release_shared_listener",
+        new=AsyncMock(),
+    ):
         yield
 
 
@@ -8340,7 +8359,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected["step_id"], "shadow_learning_consent")
 
         result = await options.async_step_shadow_learning_consent(
-            {"shadow_learning_confirm_cloud_write": True}
+            {"shadow_learning_confirm_cloud_write": True, "shadow_learning_confirm_cloud_outage": True}
         )
 
         self.assertEqual(result["type"], "form")
@@ -8348,6 +8367,15 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(options._shadow_learning_state["wizard_consent"])
         # Credentials step asks only for cloud username/password.
         self.assertEqual(set(result["data_schema"].schema), {"username", "password"})
+
+    async def test_active_learning_requires_separate_outage_consent(self) -> None:
+        options = self._wizard_options_flow()
+        await options.async_step_shadow_learning({"learning_method": LEARNING_METHOD_ACTIVE_CORRELATION})
+        await options.async_step_shadow_learning_source({"learning_source": "smartess"})
+        result = await options.async_step_shadow_learning_consent({"shadow_learning_confirm_cloud_write": True})
+        self.assertEqual(result["step_id"], "shadow_learning_consent")
+        self.assertEqual(result["errors"], {"shadow_learning_confirm_cloud_outage": "required"})
+        self.assertNotIn("wizard_consent", options._shadow_learning_state)
 
     async def test_control_discovery_dessmonitor_skips_control_consent(self) -> None:
         options = self._wizard_options_flow()
@@ -8467,6 +8495,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._shadow_learning_state["wizard_method"] = LEARNING_METHOD_ACTIVE_CORRELATION
         options._shadow_learning_state["wizard_source"] = "smartess"
         options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
 
         result = await options.async_step_shadow_learning_credentials(
             {"username": "", "password": ""}
@@ -8496,6 +8525,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         options._shadow_learning_state["wizard_method"] = LEARNING_METHOD_ACTIVE_CORRELATION
         options._shadow_learning_state["wizard_source"] = "smartess"
         options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
         options._shadow_learning_state["wizard_progress_task"] = _DoneTask()
 
         result = await options.async_step_shadow_learning_credentials(
@@ -8512,6 +8542,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_discovery_progress_creates_task_and_shows_progress(self) -> None:
         options = self._wizard_options_flow()
         options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
         options._shadow_learning_state["wizard_credentials"] = {
             "username": "demo",
             "password": "secret",
@@ -8530,6 +8561,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_discovery_progress_completes_to_review(self) -> None:
         options = self._wizard_options_flow()
         options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
         options._shadow_learning_state["wizard_credentials"] = {
             "username": "demo",
             "password": "secret",
@@ -8545,6 +8577,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_control_discovery_progress_unreachable_without_credentials(self) -> None:
         options = self._wizard_options_flow()
         options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
 
         result = await options.async_step_shadow_learning_progress()
 
@@ -9064,6 +9097,138 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             reason="user_restore_retry", raise_when_not_running=False,
         )
 
+    async def test_cloud_hold_result_has_no_retry_or_restore_and_rejects_stale_form(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        coordinator.async_stop_shadow_learning = AsyncMock()
+        options._shadow_learning_state["wizard_credentials"] = {"password": "secret"}
+        options._shadow_learning_state["wizard_consent"] = True
+        options._shadow_learning_state["wizard_outage_consent"] = True
+        shown = await options.async_step_shadow_learning_result()
+        selector = shown["data_schema"].schema["result_action"]
+        self.assertEqual([item["value"] for item in selector.config.kwargs["options"]],
+                         ["create_support_package", "done"])
+        self.assertIn("Direct cloud reconnection remains blocked", shown["description_placeholders"]["control_discovery_hint"])
+        self.assertNotIn("wizard_credentials", options._shadow_learning_state)
+        self.assertNotIn("wizard_consent", options._shadow_learning_state)
+        for action in ("restore_connection", "retry"):
+            result = await options.async_step_shadow_learning_result({"result_action": action})
+            self.assertEqual(result["errors"], {"result_action": "invalid_selection"})
+        coordinator.async_stop_shadow_learning.assert_not_awaited()
+
+    async def test_old_hold_form_offers_recovery_after_exact_no_request_retirement(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        await options.async_step_shadow_learning_result()
+        self.assertTrue(options._shadow_learning_state["protection_held"])
+        coordinator.async_shadow_learning_start_blocker.return_value = "shadow_learning_restore_pending"
+        coordinator.shadow_learning_restore_pending = True
+        shown = await options.async_step_shadow_learning_result()
+        selector = shown["data_schema"].schema["result_action"]
+        self.assertIn("restore_connection", [item["value"] for item in selector.config.kwargs["options"]])
+        self.assertNotIn("protection_held", options._shadow_learning_state)
+
+    async def test_held_read_only_failure_keeps_actual_error_visible(self) -> None:
+        for source in ("smartess", "dessmonitor"):
+            with self.subTest(source=source):
+                options = self._wizard_options_flow()
+                coordinator = options._coordinator()
+                coordinator.async_shadow_learning_start_blocker = AsyncMock(
+                    return_value="cloud_learning_protection_held"
+                )
+                options._shadow_learning_state.update({
+                    "wizard_method": "read_only_evidence",
+                    "wizard_source": source,
+                    "discovery": {"status": "error", "reason": "control_discovery_cloud_network"},
+                })
+                with patch.object(options, "_control_discovery_error_detail", return_value="Cloud network error"):
+                    shown = await options.async_step_shadow_learning_result()
+                hint = shown["description_placeholders"]["control_discovery_hint"]
+                self.assertTrue(hint.startswith("Cloud network error\n\n"))
+                self.assertGreater(len(hint), len("Cloud network error\n\n"))
+                actions = shown["data_schema"].schema["result_action"].config.kwargs["options"]
+                self.assertNotIn("restore_connection", [item["value"] for item in actions])
+                self.assertTrue(options._shadow_learning_state["protection_held"])
+                self.assertEqual(options._shadow_learning_state["discovery"]["reason"],
+                                 "control_discovery_cloud_network")
+
+    async def test_cloud_hold_menu_keeps_read_only_analysis_reachable(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        coordinator.async_stop_shadow_learning = AsyncMock()
+        menu = await options.async_step_cloud_tools()
+        self.assertEqual(menu["step_id"], "cloud_tools")
+        self.assertIn("shadow_learning", menu["menu_options"])
+        selection = await options.async_step_shadow_learning()
+        self.assertEqual(selection["step_id"], "shadow_learning")
+        source = await options.async_step_shadow_learning({"learning_method": "read_only_evidence"})
+        self.assertIn(source["step_id"], {"shadow_learning_source", "shadow_learning_credentials"})
+        coordinator.async_stop_shadow_learning.assert_not_awaited()
+
+    async def test_verified_held_retry_is_offered_without_restore_or_hold_release(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        coordinator.async_shadow_learning_retry_available = AsyncMock(return_value=True)
+        options._shadow_learning_state["discovery"] = {"status": "error", "reason": "control_discovery_cloud_network"}
+        shown = await options.async_step_shadow_learning_result()
+        actions = shown["data_schema"].schema["result_action"].config.kwargs["options"]
+        self.assertIn("retry", [item["value"] for item in actions])
+        self.assertNotIn("restore_connection", [item["value"] for item in actions])
+        self.assertTrue(options._shadow_learning_state["protection_held"])
+
+    async def test_held_retry_shows_primary_cloud_error_without_replacing_protection(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        coordinator.async_shadow_learning_retry_available = AsyncMock(return_value=True)
+        options._shadow_learning_state.update({
+            "wizard_method": "active_correlation",
+            "discovery": {"status": "error", "reason": "cloud_learning_protection_held",
+                          "diagnostics": {"primary_failure_reason": "control_discovery_cloud_timeout"}},
+        })
+        shown = await options.async_step_shadow_learning_result()
+        hint = shown["description_placeholders"]["control_discovery_hint"]
+        self.assertIn("did not respond in time", hint)
+        self.assertIn("Direct cloud reconnection remains blocked", hint)
+        self.assertEqual(options._shadow_learning_state["discovery"]["reason"], "cloud_learning_protection_held")
+        actions = shown["data_schema"].schema["result_action"].config.kwargs["options"]
+        self.assertNotIn("restore_connection", [item["value"] for item in actions])
+        options._shadow_learning_state["discovery"]["diagnostics"] = {}
+        shown = await options.async_step_shadow_learning_result()
+        self.assertEqual(shown["description_placeholders"]["control_discovery_hint"].count(
+            "Direct cloud reconnection remains blocked"), 1)
+
+    async def test_cloud_hold_allows_read_only_selection_but_blocks_stale_active_consent(self) -> None:
+        from custom_components.eybond_local.support.cloud_learning_models import LEARNING_METHOD_READ_ONLY_EVIDENCE
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        self.assertFalse(await options._async_control_discovery_restore_pending(
+            coordinator, allow_read_only_selection=True,
+        ))
+        self.assertTrue(await options._async_control_discovery_restore_pending(coordinator))
+        options._shadow_learning_state["wizard_method"] = LEARNING_METHOD_READ_ONLY_EVIDENCE
+        self.assertFalse(await options._async_control_discovery_restore_pending(coordinator))
+
+    async def test_successful_held_learning_retains_results_and_apply_action(self) -> None:
+        options = self._wizard_options_flow()
+        coordinator = options._coordinator()
+        coordinator.async_shadow_learning_start_blocker = AsyncMock(return_value="cloud_learning_protection_held")
+        options._shadow_learning_state["discovery"] = {"status": "ok", "control_count": 1}
+        with patch.object(options, "_control_discovery_review_controls", return_value=[{"key": "synthetic"}]), \
+             patch.object(options, "_control_discovery_enabled_selection_count", return_value=1):
+            shown = await options.async_step_shadow_learning_result()
+        actions = shown["data_schema"].schema["result_action"].config.kwargs["options"]
+        values = [item["value"] for item in actions]
+        self.assertIn("activate_selected", values)
+        self.assertNotIn("retry", values)
+        self.assertNotIn("restore_connection", values)
+        self.assertEqual(options._shadow_learning_state["discovery"]["status"], "ok")
+
     async def test_control_discovery_recovery_exception_keeps_restore_obligation(self) -> None:
         options = self._wizard_options_flow()
         coordinator = options._coordinator()
@@ -9171,7 +9336,7 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             {"learning_source": "smartess"}
         )
         await options.async_step_shadow_learning_consent(
-            {"shadow_learning_confirm_cloud_write": True}
+            {"shadow_learning_confirm_cloud_write": True, "shadow_learning_confirm_cloud_outage": True}
         )
         progress = await options.async_step_shadow_learning_credentials(
             {"username": "demo", "password": "secret"}
@@ -11175,6 +11340,27 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
             "/config/eybond_local/shadow_learning_traces/auto.jsonl",
         )
 
+    async def test_control_discovery_binds_dispatch_to_original_run_and_has_no_unowned_fallback(self) -> None:
+        coordinator = self._RunnerCoordinator(ready=True)
+        options = self._runner_options_flow(coordinator)
+        captured: dict = {}
+        login_p, fetch_p, orchestrate_p, overlay_p = self._runner_cloud_patches(captured=captured)
+        with login_p, fetch_p, orchestrate_p, overlay_p:
+            await options._async_run_control_discovery()
+        action = Mock(side_effect=AssertionError("must never call raw HTTP directly"))
+        with self.assertRaisesRegex(RuntimeError, "hold_dispatch_context_missing"):
+            await captured["dispatch_action"](action, value="synthetic")
+        coordinator.async_dispatch_shadow_learning_cloud_action = AsyncMock(return_value="owned")
+        # An old flow must carry its original scope, not the mutable display state
+        # or the (longer/aliased) PN returned by the cloud metadata bundle.
+        coordinator.smartess_collector_pn = "E5000099990001"
+        options._shadow_learning_state["session"] = {"session_id": "replacement-study"}
+        self.assertEqual(await captured["dispatch_action"](action, value="synthetic"), "owned")
+        coordinator.async_dispatch_shadow_learning_cloud_action.assert_awaited_once_with(
+            action, collector_pn="E5000020000000", route_owner_id="auto-session", value="synthetic",
+        )
+        action.assert_not_called()
+
     async def test_control_discovery_runner_is_fail_closed_on_failure(self) -> None:
         coordinator = self._RunnerCoordinator(ready=True)
         options = self._runner_options_flow(coordinator)
@@ -11474,6 +11660,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ci, "_SessionPinnedIdentityReader", return_value=_Reader()
         ), patch.object(
             ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
+        ), patch(
+            "custom_components.eybond_local.collector.transport._acquire_shared_listener",
+            new=AsyncMock(return_value=object()),
+        ), patch(
+            "custom_components.eybond_local.collector.transport._release_shared_listener",
+            new=AsyncMock(),
         ):
             yield _Reader
 
@@ -14252,7 +14444,7 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
 
     @contextmanager
     def _identity_wire_for(self, detector):
-        """Drive the REAL identity transaction from a detector's declared behaviour."""
+        """Drive real identity with a successful bind and scripted collector I/O."""
 
         import custom_components.eybond_local.connection.callback_identity as ci
         from custom_components.eybond_local.connection.callback_ledger import (
@@ -14285,6 +14477,12 @@ class ConnectionStrategyVerificationFlowTests(unittest.IsolatedAsyncioTestCase):
             ci, "_SessionPinnedIdentityReader", return_value=_Reader()
         ), patch.object(
             ci, "DEFAULT_ONBOARDING_TIMEOUT_POLICY", _fast_identity_policy()
+        ), patch(
+            "custom_components.eybond_local.collector.transport._acquire_shared_listener",
+            new=AsyncMock(return_value=object()),
+        ), patch(
+            "custom_components.eybond_local.collector.transport._release_shared_listener",
+            new=AsyncMock(),
         ):
             yield
 

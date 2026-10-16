@@ -33,6 +33,8 @@ from custom_components.eybond_local.support.proxy_capture import proxy_capture_o
 
 
 def _install_coordinator_stubs() -> None:
+    learning_isolation = ensure_module("custom_components.eybond_local.runtime.coordinator.learning_isolation")
+    learning_isolation.async_prepare_local_learning_route = AsyncMock()
     custom_components = ensure_module("custom_components")
     eybond_local = ensure_module("custom_components.eybond_local")
     runtime_package = ensure_module("custom_components.eybond_local.runtime")
@@ -204,7 +206,9 @@ def _install_coordinator_stubs() -> None:
     connection_spec_factory = ensure_module(
         "custom_components.eybond_local.connection.spec_factory"
     )
-    connection_spec_factory.build_connection_spec = lambda *args, **kwargs: None
+    connection_spec_factory.build_connection_spec = lambda *args, **kwargs: types.SimpleNamespace(
+        collector_pn="E5000020000000",
+    )
 
     entity_scope = importlib.import_module(
         "custom_components.eybond_local.collector.entity_scope"
@@ -647,6 +651,9 @@ def _install_coordinator_stubs() -> None:
                 "last_restore_attempt_at": "",
                 "last_restore_error": "",
                 "status": "",
+                "protection_version": 1,
+                "cloud_source": "smartess",
+                "cloud_commands_possible": False,
                 **kwargs,
             }
         )
@@ -731,6 +738,8 @@ def _install_coordinator_stubs() -> None:
     support_diagnostic_runner.run_scenario = run_scenario
 
 _STUBBED_MODULE_NAMES: tuple[str, ...] = (
+    "custom_components.eybond_local.runtime.coordinator.learning_isolation",
+    "custom_components.eybond_local.runtime.coordinator.learning_recovery",
     "custom_components",
     "custom_components.eybond_local",
     "custom_components.eybond_local.runtime",
@@ -870,7 +879,25 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             "custom_components.eybond_local.runtime.coordinator.root"
         )
 
+        # object.__new__ harnesses below intentionally bypass the HA composition
+        # root. Supply an explicit no-hold persistence boundary for those tests;
+        # real construction overrides it and real-HA safety tests use disk.
+        async def _no_learning_hold():
+            return ""
+        coordinator_module.EybondLocalCoordinator._cloud_learning_mutation_fence = types.SimpleNamespace(
+            hold_reason=_no_learning_hold,
+        )
+
         cls.coordinator_module = coordinator_module
+        # Bare transaction harnesses have no HA/disk; native-HA tests exercise
+        # real interrupted-journal quarantine and permanent-local verification.
+        recovery = importlib.import_module(
+            "custom_components.eybond_local.runtime.coordinator.learning_recovery"
+        )
+        cls._recovery_patch = patch.object(
+            recovery, "async_preserve_interrupted_learning_hold", new=AsyncMock()
+        )
+        cls._recovery_patch.start()
         cls.coordinator_polling_module = importlib.import_module(
             "custom_components.eybond_local.runtime.coordinator.polling"
         )
@@ -935,6 +962,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._recovery_patch.stop()
         for name in reversed(_STUBBED_MODULE_NAMES):
             original = cls._saved_modules.get(name)
             if original is None:
@@ -1213,6 +1241,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         hass = types.SimpleNamespace(
             config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry),
+            config=types.SimpleNamespace(config_dir="/unused-test-config"),
         )
 
         coordinator = self.coordinator_module.EybondLocalCoordinator(hass, entry)
@@ -1292,6 +1321,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
         hass = types.SimpleNamespace(
             config_entries=types.SimpleNamespace(async_update_entry=_async_update_entry),
+            config=types.SimpleNamespace(config_dir="/unused-test-config"),
         )
 
         coordinator = self.coordinator_module.EybondLocalCoordinator(hass, entry)
@@ -3121,6 +3151,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             coordinator._configure_reverse_discovery_mode = lambda: None
             coordinator._configure_callback_ownership = lambda: None
+            coordinator._async_observe_runtime_listener = _noop_async
             coordinator._async_recover_proxy_capture_state = _noop_async
             coordinator._async_recover_shadow_learning_state = _noop_async
             coordinator._async_warm_smartess_cloud_evidence_cache = _noop_async
@@ -6438,7 +6469,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     RuntimeError,
                     "proxy_capture_route_running",
                 ):
-                    await coordinator.async_start_shadow_learning(
+                    await coordinator.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow.jsonl"),
                         raw_capture={},
                     )
@@ -6518,7 +6549,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     RuntimeError,
                     "shadow_learning_requires_cloud_and_ha_profile",
                 ):
-                    await coordinator.async_start_shadow_learning(
+                    await coordinator.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow.jsonl"),
                         raw_capture={},
                     )
@@ -6571,7 +6602,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     RuntimeError,
                     "shadow_learning_preflight_blocked:insufficient_memory:128MiB",
                 ):
-                    await coordinator.async_start_shadow_learning(
+                    await coordinator.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow.jsonl"),
                         raw_capture={},
                     )
@@ -6842,6 +6873,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 last_restore_attempt_at="",
                 last_restore_error="",
                 route_owner_id="shadow_learning:entry-id:1",
+                protection_version=1, cloud_source="smartess", cloud_commands_possible=False,
             )
             coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
             coordinator._runtime = types.SimpleNamespace(
@@ -6858,7 +6890,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             async def _async_save_shadow_learning_session_state(new_state):
                 saved_states.append(new_state)
 
-            async def _async_clear_shadow_learning_session_state():
+            async def _async_clear_shadow_learning_session_state(**kwargs):
                 clear_calls.append(True)
 
             async def _async_request_refresh():
@@ -6905,6 +6937,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 last_restore_attempt_at="",
                 last_restore_error="",
                 route_owner_id="shadow_learning:entry-id:1",
+                protection_version=1, cloud_source="smartess", cloud_commands_possible=False,
             )
             coordinator.config_entry = types.SimpleNamespace(entry_id="entry-id")
             coordinator._runtime = types.SimpleNamespace(
@@ -6928,7 +6961,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             async def _async_save_shadow_learning_session_state(new_state):
                 saved_states.append(new_state)
 
-            async def _async_clear_shadow_learning_session_state():
+            async def _async_clear_shadow_learning_session_state(**kwargs):
                 clear_calls.append(True)
 
             async def _async_request_refresh():
@@ -7154,6 +7187,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 last_restore_attempt_at="",
                 last_restore_error="",
                 route_owner_id=f"shadow_learning:{entry_id}:1",
+                protection_version=1, cloud_source="smartess", cloud_commands_possible=False,
             )
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
@@ -7280,7 +7314,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                         await asyncio.sleep(0)  # enqueue BEFORE preparation announces ownership
                         start = asyncio.create_task(
                             coord.async_start_proxy_capture(confirm_redirect=True)
-                            if kind == "proxy" else coord.async_start_shadow_learning(
+                            if kind == "proxy" else coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                                 output_path=Path("unused.jsonl"), raw_capture={}
                             )
                         )
@@ -7320,7 +7354,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                         coord.async_request_refresh = coord._async_update_data
                         start = asyncio.create_task(
                             coord.async_start_proxy_capture(confirm_redirect=True)
-                            if kind == "proxy" else coord.async_start_shadow_learning(
+                            if kind == "proxy" else coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                                 output_path=Path("unused.jsonl"), raw_capture={}
                             )
                         )
@@ -7351,7 +7385,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                         capture = AsyncMock()
                         coord._runtime.async_capture_support_evidence = capture
                         with self.assertRaisesRegex(RuntimeError, "^shadow_learning_restore_pending$"):
-                            await coord.async_start_shadow_learning()
+                            await coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess", )
                         capture.assert_not_awaited()
                         self.assertEqual(rec["saved"], [])
                         self.assertEqual(rec["route"], [])
@@ -7373,7 +7407,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     await asyncio.Future()
 
                 coord._runtime.async_capture_support_evidence = capture
-                start = asyncio.create_task(coord.async_start_shadow_learning())
+                start = asyncio.create_task(coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess", ))
                 await asyncio.wait_for(entered.wait(), 1)
                 self.assertIs(await coord._async_update_data(), coord.data)
                 await asyncio.wait_for(coord._async_cancel_cloud_tool_preparation(), 1)
@@ -7408,7 +7442,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                             coord.async_request_refresh = coord._async_update_data
                             start = asyncio.create_task(
                                 coord.async_start_proxy_capture(confirm_redirect=True)
-                                if kind == "proxy" else coord.async_start_shadow_learning(
+                                if kind == "proxy" else coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                                     output_path=Path("unused.jsonl"), raw_capture={}
                                 )
                             )
@@ -7477,7 +7511,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         async def d_restore(_endpoint):
             return True, ""
 
-        async def d_clear():
+        async def d_clear(**kwargs):
             rec["clear"].append(True)
             rec["present"] = False
 
@@ -7485,13 +7519,20 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             rec["refresh"].append(True)
 
         async def d_endpoint_context():
-            return types.SimpleNamespace(
+            return self.coordinator_cloud_tools_module._CloudToolEndpointContext(
                 current_endpoint="eu.smartess.io,18899,TCP",
                 upstream_endpoint="eu.smartess.io,18899,TCP",
                 target_endpoint="192.168.1.50,18899,TCP",
             )
 
         pick = lambda key, default: seams.get(key, default)
+        async def prepare_local(_coordinator, state):
+            await pick("redirect", d_redirect)(state.proxy_endpoint, apply_changes=True)
+            return object()
+
+        coordinator._connection_spec = types.SimpleNamespace(
+            tcp_port=18899, effective_advertised_tcp_port=18899,
+        )
         coordinator.config_entry = types.SimpleNamespace(
             entry_id="entry-cancel",
             data={"collector_kind": "factory_eybond"},
@@ -7531,6 +7572,11 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             return_value=value,
         )
         patchers = [
+            patch.object(
+                importlib.import_module("custom_components.eybond_local.runtime.coordinator.learning_isolation"),
+                "async_prepare_local_learning_route",
+                new=prepare_local,
+            ),
             prop("support_acquisition_readiness", self._support_readiness()),
             prop("smartess_collector_pn", "E5000020000000"),
             prop("collector_cloud_tools_allowed", True),
@@ -7623,7 +7669,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
 
             with self._shadow_start_env(rec, save=_save, restore=_restore) as coord:
                 with self.assertRaises(asyncio.CancelledError):
-                    await coord.async_start_shadow_learning(
+                    await coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow-cancel-persist.jsonl"),
                         raw_capture={},
                     )
@@ -7646,11 +7692,13 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 raise asyncio.CancelledError()
 
             async def _restore(_endpoint):
-                raise AssertionError("endpoint restore must not run before endpoint mutation")
+                # Local proof already changed the endpoint; no cloud test was
+                # sent yet, so cancellation must roll that preparation back.
+                return True, ""
 
             with self._shadow_start_env(rec, route=_route, restore=_restore) as coord:
                 with self.assertRaises(asyncio.CancelledError):
-                    await coord.async_start_shadow_learning(
+                    await coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow-cancel-route.jsonl"),
                         raw_capture={},
                     )
@@ -7663,8 +7711,8 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             )
             self.assertEqual(
                 rec["redirect"],
-                [],
-                "a cancelled route start must not reach the endpoint write",
+                [("192.168.1.50,18899,TCP", True)],
+                "the permanent local route is proved before installing the temporary filter",
             )
             self._assert_state_token_consistent(rec, "entry-cancel")
             self.assertFalse(self._authority().is_held("entry-cancel"))
@@ -7675,7 +7723,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         async def _run() -> None:
             rec = self._fresh_rec()
             with self._shadow_start_env(rec) as coord:
-                result = await coord.async_start_shadow_learning(
+                result = await coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                     output_path=Path("/tmp/shadow-cloud-route.jsonl"),
                     raw_capture={},
                 )
@@ -7807,7 +7855,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 restore=_restore,
             ) as coord:
                 with self.assertRaises(asyncio.CancelledError):
-                    await coord.async_start_shadow_learning(
+                    await coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow-restore-failed.jsonl"),
                         raw_capture={},
                     )
@@ -7853,7 +7901,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 rec, route=_route, stop_route=_stop_route, restore=_restore
             ) as coord:
                 task = asyncio.ensure_future(
-                    coord.async_start_shadow_learning(
+                    coord.async_start_shadow_learning(confirm_cloud_outage=True, cloud_source="smartess",
                         output_path=Path("/tmp/shadow-two-cancel.jsonl"),
                         raw_capture={},
                     )
@@ -7901,6 +7949,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                 last_restore_attempt_at="",
                 last_restore_error="",
                 route_owner_id=f"shadow_learning:{entry_id}:1",
+                protection_version=1, cloud_source="smartess", cloud_commands_possible=False,
             )
             coordinator = object.__new__(self.coordinator_module.EybondLocalCoordinator)
             coordinator.config_entry = types.SimpleNamespace(entry_id=entry_id)
@@ -7929,7 +7978,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
                     "restore_error": "",
                 }
 
-            async def _clear():
+            async def _clear(**kwargs):
                 rec["present"] = False  # record actually removed
                 reached_clear.set()
                 await clear_gate.wait()  # blocks BEFORE returning

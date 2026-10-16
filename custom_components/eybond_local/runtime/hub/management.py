@@ -458,6 +458,15 @@ class HubManagementMixin:
         if type(generation) is int:
             record["session_generation_start"] = generation
         try:
+            if name in {"write_endpoint", "apply", "reboot", "write_wifi", "write_uart"}:
+                guard = getattr(self, "_collector_mutation_guard", None)
+                if guard is not None:
+                    await guard()
+                    if (
+                        session_identity != getattr(self._link_manager, "owned_session_identity", None)
+                        or generation != getattr(self._link_manager, "owned_session_generation", None)
+                    ):
+                        raise CollectorManagementTransportError("collector_management_session_changed")
             result = await operation()
             if (
                 name == "read_endpoint_state"
@@ -664,11 +673,14 @@ class HubManagementMixin:
 
         await self._async_ensure_connected(timeout=10.0, require_heartbeat=False)
         adapter = self._collector_management_adapter(active_only=True)
-        return await adapter.async_set_wifi_credentials(
-            ssid=ssid,
-            password=password,
-            ssid_parameter=ssid_parameter,
-            password_parameter=password_parameter,
+        return await self._run_management_operation(
+            "write_wifi",
+            lambda: adapter.async_set_wifi_credentials(
+                ssid=ssid,
+                password=password,
+                ssid_parameter=ssid_parameter,
+                password_parameter=password_parameter,
+            ),
         )
 
     async def async_set_collector_uart_baudrate(self, baudrate: str) -> str:
@@ -676,7 +688,9 @@ class HubManagementMixin:
 
         await self._async_ensure_connected(timeout=10.0, require_heartbeat=False)
         adapter = self._collector_management_adapter(active_only=True)
-        return await adapter.async_set_uart_baudrate(baudrate)
+        return await self._run_management_operation(
+            "write_uart", lambda: adapter.async_set_uart_baudrate(baudrate),
+        )
 
     async def _async_execute_collector_system_action(
         self, *, action: str, timeout: float = 5.0, require_heartbeat: bool = True,

@@ -154,6 +154,7 @@ class LinkCloudRoutesMixin:
                 upstream_port=upstream_port,
                 seed=seed,
                 output_path=output_path,
+                expected_session_protocol=expected_session_protocol,
             )
             await handler.start()
             route = SharedProxyCaptureRoute(

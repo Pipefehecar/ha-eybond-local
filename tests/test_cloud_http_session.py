@@ -21,6 +21,37 @@ def reply(body=b'{"err":0,"dat":{}}', *, status=200, remaining=0, will_close=Fal
 
 
 class SessionTests(unittest.TestCase):
+    def test_no_request_proof_is_lifetime_scoped_and_closes_resource(self):
+        for stage in ("connect", "request", "getresponse", "success_then_connect"):
+            with self.subTest(stage=stage), patch.object(http, "HTTPSConnection") as factory:
+                connection = factory.return_value
+                connection.sock = None
+                connection.connect.side_effect = lambda: setattr(connection, "sock", Mock())
+                connection.getresponse.return_value = reply()
+                session = http.CloudHttpSession(BASE)
+                if stage == "success_then_connect":
+                    self.get(session)
+                    connection.sock = None
+                    connection.connect.side_effect = TimeoutError()
+                else:
+                    getattr(connection, stage).side_effect = TimeoutError()
+                with self.assertRaises(URLError):
+                    self.get(session)
+                self.assertEqual(session.close_and_confirm_no_request(), stage == "connect")
+                with self.assertRaisesRegex(ValueError, "closed"):
+                    self.get(session)
+
+    def test_failed_no_request_check_does_not_close_healthy_connection(self):
+        with patch.object(http, "HTTPSConnection") as factory:
+            factory.return_value.getresponse.return_value = reply(b'{"err":4,"dat":{}}')
+            session = http.CloudHttpSession(BASE)
+            self.get(session)
+            self.assertFalse(session.close_and_confirm_no_request())
+            factory.return_value.close.assert_not_called()
+            self.get(session)
+            self.assertEqual(factory.return_value.request.call_count, 2)
+            session.close()
+
     def get(self, session, **kwargs):
         return session.get(BASE + "?token=synthetic-secret&action=control", headers={}, timeout=2, **kwargs)
 

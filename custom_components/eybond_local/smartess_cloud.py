@@ -53,7 +53,7 @@ class SmartEssCloudError(RuntimeError):
 
 
 class SmartEssActionRejectedError(SmartEssCloudError):
-    """A completed SmartESS action request with a definitive rejection."""
+    """An API error response, not proof that command delivery is terminal."""
 
     def __init__(self, *, err: int, desc: str) -> None:
         self.err = int(err)
@@ -89,6 +89,8 @@ def classify_smartess_cloud_error(exc: BaseException) -> str:
     if isinstance(exc, SmartEssBundleStageError):
         return exc.cloud_error_code
     if isinstance(exc, TimeoutError):
+        return CLOUD_ERROR_TIMEOUT
+    if isinstance(exc, SmartEssActionRejectedError) and exc.err == 0x0002:
         return CLOUD_ERROR_TIMEOUT
     if isinstance(exc, SmartEssCloudError):
         message = str(exc)

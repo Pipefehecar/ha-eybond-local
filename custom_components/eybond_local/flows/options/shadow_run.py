@@ -117,13 +117,41 @@ def _metadata_with_local_coverage(
 class ShadowLearningRunMixin:
     """ShadowLearningRun lifecycle."""
 
-    async def _async_control_discovery_restore_pending(self, coordinator) -> bool:
+    async def _async_control_discovery_restore_pending(
+        self, coordinator, *, allow_read_only_selection: bool = False,
+    ) -> bool:
         """Resolve durable recovery before every wizard entry, including stale forms."""
 
         blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
+        blocker_reason = await blocker() if callable(blocker) else ""
+        if blocker_reason == "cloud_learning_protection_held":
+            self._shadow_learning_state["protection_held"] = True
+            retry_check = getattr(coordinator, "async_shadow_learning_retry_available", None)
+            retry_available = await retry_check() is True if callable(retry_check) else False
+            self._shadow_learning_state["protected_retry_available"] = retry_available
+            if allow_read_only_selection or self._shadow_learning_state.get(
+                "wizard_method"
+            ) == LEARNING_METHOD_READ_ONLY_EVIDENCE or retry_available:
+                return False
+            self._shadow_learning_state.pop("wizard_credentials", None)
+            self._shadow_learning_state.pop("wizard_consent", None)
+            self._shadow_learning_state.pop("wizard_outage_consent", None)
+            if self._shadow_learning_state.get("discovery", {}).get("status") == "ok":
+                return True
+            self._shadow_learning_state["discovery"] = {
+                "status": "error", "reason": blocker_reason,
+            }
+            return True
+        # A reviewed zero-request receipt can retire the hold while an old form
+        # is still open. Presentation follows the fresh coordinator decision.
+        self._shadow_learning_state.pop("protection_held", None)
+        self._shadow_learning_state.pop("protected_retry_available", None)
+        if self._shadow_learning_state.get("discovery", {}).get("reason") == "cloud_learning_protection_held":
+            self._shadow_learning_state["discovery"] = {
+                "status": "error", "reason": CONTROL_DISCOVERY_FAILURE_GENERIC,
+            }
         pending = (
-            callable(blocker)
-            and await blocker() == "shadow_learning_restore_pending"
+            blocker_reason == "shadow_learning_restore_pending"
         ) or bool(getattr(coordinator, "shadow_learning_restore_pending", False))
         if pending:
             self._shadow_learning_state.pop("wizard_credentials", None)
@@ -142,6 +170,8 @@ class ShadowLearningRunMixin:
         """Reduce internal exceptions to a closed user-facing reason set."""
 
         reason = str(exc).strip()
+        if reason == "cloud_learning_protection_held":
+            return "cloud_learning_protection_held"
         if reason == "shadow_learning_restore_pending" or (
             reason.startswith("shadow_learning_preflight_blocked:")
             and "shadow_learning_restore_pending" in reason.split(":", 1)[1].split(",")
@@ -167,7 +197,23 @@ class ShadowLearningRunMixin:
             str(discovery.get("reason") or "") if isinstance(discovery, dict) else ""
         )
         reason = reason.strip()
+        if reason == "cloud_learning_protection_held":
+            diagnostics = discovery.get("diagnostics") or {}
+            primary = diagnostics.get("primary_failure_reason") if isinstance(diagnostics, dict) else None
+            # Show the actual run failure alongside, not instead of, the hold.
+            # Only the closed cloud-error vocabulary can enter this message.
+            if type(primary) is str and primary in {
+                "control_discovery_cloud_auth_failed", "control_discovery_cloud_rate_limited",
+                "control_discovery_cloud_unavailable", "control_discovery_cloud_timeout",
+                "control_discovery_cloud_network", "control_discovery_cloud_unexpected",
+            }:
+                reason = primary
         defaults = {
+            "cloud_learning_protection_held": (
+                "Direct cloud reconnection remains blocked. Use a protected retry "
+                "only when offered by the wizard, or download a Support Archive "
+                "for recovery review. Read-only cloud analysis remains available."
+            ),
             "shadow_learning_restore_pending": (
                 "Home Assistant could not confirm restoration of the previous "
                 "collector connection. Open Expand device support → Analyze cloud "
@@ -181,8 +227,8 @@ class ShadowLearningRunMixin:
             ),
             CONTROL_DISCOVERY_FAILURE_ROUTE_DROPPED: (
                 "The temporary cloud connection ended before all capabilities "
-                "could be checked. Home Assistant stopped safely and restored "
-                "the collector connection."
+                "could be checked. The check stopped. See the connection and "
+                "protection status below before taking another action."
             ),
             CONTROL_DISCOVERY_FAILURE_RUN_INCOMPLETE: (
                 "The device check ended before all planned capabilities were tested."
@@ -210,7 +256,8 @@ class ShadowLearningRunMixin:
                 "The cloud service returned an unexpected response."
             ),
             CONTROL_DISCOVERY_FAILURE_GENERIC: (
-                "Home Assistant stopped safely and restored the collector connection."
+                "The check stopped. See the connection and protection status "
+                "below; this message does not confirm cloud restoration."
             ),
         }
         normalized = reason if reason in defaults else CONTROL_DISCOVERY_FAILURE_GENERIC
@@ -265,7 +312,9 @@ class ShadowLearningRunMixin:
                 ),
             )
 
-        if await self._async_control_discovery_restore_pending(coordinator):
+        if await self._async_control_discovery_restore_pending(
+            coordinator, allow_read_only_selection=True,
+        ):
             return await self.async_step_shadow_learning_result()
 
         readiness = self._support_acquisition_readiness()
@@ -460,14 +509,19 @@ class ShadowLearningRunMixin:
         consent = bool(
             (user_input or {}).get("shadow_learning_confirm_cloud_write", False)
         )
+        outage_consent = (user_input or {}).get("shadow_learning_confirm_cloud_outage") is True
         if user_input is not None:
-            if consent:
+            if consent and outage_consent:
                 self._reset_control_discovery_run_state()
                 self._shadow_learning_state["wizard_method"] = method_id
                 self._shadow_learning_state["wizard_source"] = source_id
                 self._shadow_learning_state["wizard_consent"] = True
+                self._shadow_learning_state["wizard_outage_consent"] = True
                 return await self.async_step_shadow_learning_credentials()
-            errors["shadow_learning_confirm_cloud_write"] = "required"
+            if not consent:
+                errors["shadow_learning_confirm_cloud_write"] = "required"
+            elif not outage_consent:
+                errors["shadow_learning_confirm_cloud_outage"] = "required"
         return self.async_show_form(
             step_id="shadow_learning_consent",
             data_schema=vol.Schema(
@@ -476,6 +530,7 @@ class ShadowLearningRunMixin:
                         "shadow_learning_confirm_cloud_write",
                         default=consent,
                     ): _BOOLEAN_SELECTOR,
+                    vol.Required("shadow_learning_confirm_cloud_outage", default=outage_consent): _BOOLEAN_SELECTOR,
                 }
             ),
             errors=errors,
@@ -518,7 +573,8 @@ class ShadowLearningRunMixin:
         requires_consent = engine.method.requires_control_consent
         if (
             requires_consent
-            and not bool(self._shadow_learning_state.get("wizard_consent"))
+            and not (self._shadow_learning_state.get("wizard_consent")
+                     and self._shadow_learning_state.get("wizard_outage_consent"))
         ):
             # Credentials are unreachable without a coordinator and prior consent.
             return await self.async_step_shadow_learning()
@@ -772,7 +828,11 @@ class ShadowLearningRunMixin:
                     or session.get("status") in {"restore_failed", "restore_unconfirmed"}
                 ):
                     recovery_pending = True
-                    failure_reason = "shadow_learning_restore_pending"
+                    failure_reason = (
+                        "cloud_learning_protection_held"
+                        if self._shadow_learning_state.get("protection_held")
+                        else "shadow_learning_restore_pending"
+                    )
             self._shadow_learning_state["discovery"] = {
                 "status": "error",
                 "reason": failure_reason,
@@ -916,14 +976,33 @@ class ShadowLearningRunMixin:
         ):
             raise RuntimeError("shadow_learning_collector_identity_changed")
 
+        run_route_owner_id = ""
+
         async def _start_shadow_route() -> None:
+            nonlocal run_route_owner_id
             if not requires_shadow_route:
                 raise RuntimeError("cloud_learning_shadow_route_forbidden")
-            session = await coordinator.async_start_shadow_learning(
-                allow_ack_writes=False
+            start = (coordinator.async_retry_shadow_learning
+                     if self._shadow_learning_state.get("protected_retry_available") is True
+                     else coordinator.async_start_shadow_learning)
+            session = await start(
+                allow_ack_writes=False,
+                confirm_cloud_outage=self._shadow_learning_state.get("wizard_outage_consent") is True,
+                cloud_source=self._control_discovery_learning_source(coordinator),
             )
             self._shadow_learning_state["session"] = dict(session or {})
+            run_route_owner_id = (session or {}).get("session_id", "")
             self._publish_shadow_learning_artifacts(coordinator)
+
+        async def _dispatch_owned_action(callable_, **kwargs):
+            dispatch = getattr(coordinator, "async_dispatch_shadow_learning_cloud_action", None)
+            if not requires_shadow_route or not callable(dispatch):
+                # No fallback to an unowned HTTP action in the HA product path.
+                raise RuntimeError("cloud_learning_hold_dispatch_context_missing")
+            return await dispatch(
+                callable_, collector_pn=run_collector_pn,
+                route_owner_id=run_route_owner_id, **kwargs,
+            )
 
         outcome = await runner.async_run(
             executor=self.hass.async_add_executor_job,
@@ -938,10 +1017,10 @@ class ShadowLearningRunMixin:
             max_fields=CONTROL_DISCOVERY_AUTOMATIC_MAX_FIELDS,
             progress=self._set_control_discovery_progress,
             orchestrator_callbacks=(
-                self._shadow_learning_orchestrator_callbacks(
-                    coordinator,
-                    shadow_runtime,
-                )
+                {
+                    **self._shadow_learning_orchestrator_callbacks(coordinator, shadow_runtime),
+                    "dispatch_action": _dispatch_owned_action,
+                }
                 if requires_shadow_route
                 else {}
             ),
@@ -1023,6 +1102,9 @@ class ShadowLearningRunMixin:
             # evidence on one exact snapshot without mutating the outcome.
             result["metadata_evidence"] = metadata_evidence
 
+        if (self._shadow_learning_state.get("session") or {}).get("protected_retry") is True:
+            from ...support.shadow_learning.retry_evidence import qualify_retry_evidence
+            result = qualify_retry_evidence(result)
         self._shadow_learning_state["orchestration"] = result
         plan = result.get("plan") if isinstance(result, dict) else None
         if isinstance(plan, list):
@@ -1268,7 +1350,7 @@ class ShadowLearningRunMixin:
         return None
 
     async def _async_control_discovery_stop(self, coordinator) -> dict[str, Any]:
-        """Stop the shadow session and restore the endpoint on the success path."""
+        """Stop interception, retaining the cloud hold after any test command."""
 
         stop = getattr(coordinator, "async_stop_shadow_learning", None)
         if not callable(stop):
@@ -1278,6 +1360,10 @@ class ShadowLearningRunMixin:
             **dict(self._shadow_learning_state.get("session") or {}),
             **(dict(result) if isinstance(result, dict) else {}),
         }
+        if merged.get("status") == "cloud_held":
+            self._shadow_learning_state["session"] = merged
+            self._shadow_learning_state["protection_held"] = True
+            return dict(result)
         if (
             merged.get("restore_confirmed") is False
             or merged.get("status") in {"restore_failed", "restore_unconfirmed"}
@@ -1290,7 +1376,7 @@ class ShadowLearningRunMixin:
         return dict(result) if isinstance(result, dict) else {}
 
     async def _async_control_discovery_failsafe_stop(self, coordinator) -> None:
-        """Best-effort fail-closed stop + endpoint restore after a discovery failure.
+        """Best-effort stop, preserving protection after a discovery failure.
 
         Tolerant of an already-stopped or never-started session: it never raises,
         so it is safe to call regardless of how far the pipeline progressed.
@@ -1312,6 +1398,8 @@ class ShadowLearningRunMixin:
             )
             return None
         if isinstance(result, dict):
+            if result.get("status") == "cloud_held":
+                self._shadow_learning_state["protection_held"] = True
             self._shadow_learning_state["session"] = {
                 **dict(self._shadow_learning_state.get("session") or {}),
                 **result,

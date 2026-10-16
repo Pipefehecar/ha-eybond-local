@@ -63,10 +63,11 @@ Check these first:
 
 - The collector has stable Wi-Fi.
 - For active learning, the collector uses the **Cloud + Home Assistant**
-  connection profile. Active learning temporarily routes its cloud traffic
-  through Home Assistant under the same protected endpoint transaction used by
-  proxy capture, then restores the original cloud endpoint. A read-only metadata
-  source does not change the collector endpoint.
+  connection profile, or an eligible protected retry offered by the wizard.
+  After the first test command, the collector stays on the verified local
+  Home Assistant endpoint, even when learning succeeds. Cloud telemetry and app
+  control remain disconnected pending reviewed recovery; accept this outage
+  before starting. A read-only metadata source does not change the endpoint.
 - For active verification, Home Assistant can read live data from the inverter.
 - You know the cloud/app username and password for this device, if the learning
   flow asks for them.
@@ -85,8 +86,9 @@ If the inverter powers critical loads, run learning only when it is safe to reco
 6. Choose **Analyze device data** for a read-only check, or **Verify additional
    local controls** only for an advanced active check.
 7. If more than one compatible API is offered, choose the exact cloud source.
-8. For active verification, read and accept the notice covering the temporary
-   endpoint change, bounded cloud test commands, and local interception.
+8. For active verification, read and accept both notices covering the local
+   endpoint change, bounded cloud test commands, local interception, and the
+   cloud outage that remains after learning.
 9. Enter the supported cloud/app credentials for this one session, if the flow
    asks for them.
 10. Wait for the check to finish. Progress can pause while the selected cloud
@@ -128,20 +130,28 @@ applies to active verification, not ordinary read-only cloud analysis.
 1. Home Assistant signs in to the selected cloud API with the credentials you entered.
 2. It verifies the exact device identity and asks which settings and fields the cloud knows for this
    device.
-3. Only after that succeeds, it temporarily changes the collector's cloud
-   endpoint to a local Home Assistant shadow route.
-4. The selected cloud API sends bounded test commands for this exact device.
+3. Only after that succeeds, it changes the collector's endpoint to the normal
+   local Home Assistant listener. It verifies a controlled reconnect without a
+   UDP callback, the exact collector identity, endpoint readback and fresh local
+   inverter data. If that cannot be verified, no cloud test commands are sent.
+4. Before the first test command, Home Assistant durably records both the
+   command intent and a cloud protection hold. The selected cloud API then sends
+   bounded test commands for this exact device through the temporary filter.
 5. Home Assistant captures the matching local write commands and blocks them
    before they reach the real inverter. If a cloud success cannot be matched to
    a local interception, the run stops as a possible unproxied write.
-6. Home Assistant restores the collector's previous cloud endpoint. If that
-   restoration cannot be confirmed, the recovery action remains available in
-   the same support menu.
+6. After the first test command, Home Assistant **keeps the collector local**,
+   including after successful learning. Removing the temporary filter hands the
+   connection back to normal local polling; it does not restore direct cloud access.
 7. It builds a local result for review.
 
 This endpoint transaction is the critical part of active verification. The
-confirmation checkbox is consent to the temporary rerouting, the bounded cloud
-test commands, and their local interception. Read-only analysis does none of
+confirmation checkboxes cover rerouting, bounded cloud test commands and their
+local interception, plus the cloud outage. Cloud telemetry and app control remain
+unavailable until safe recovery is reviewed with the maintainer. There is no
+automatic timeout, restart or force-clear that releases this protection. Local
+HA telemetry and supported controls remain available, and successfully learned
+controls can still be reviewed and applied. Read-only analysis does none of
 these operations and never changes the collector endpoint.
 
 The currently implemented method/source combinations are:
@@ -306,7 +316,8 @@ an older learned control with the corrected command type.
 If Home Assistant says it could not confirm restoration of the collector
 connection, open **Configure → Expand device support → Analyze cloud data and
 device capabilities** and choose **Retry restoring the collector connection**.
-With a saved pending recovery, opening **Expand device support** takes you to
+Before any cloud test command, a failed preparation may safely restore the
+previous endpoint. With such a saved pending recovery, opening **Expand device support** takes you to
 that recovery screen, even after reopening Home Assistant. An already-open
 learning form also checks recovery before proceeding. If you instead see only
 new-learning consent, do not start it to try to recover: share a screenshot and
@@ -317,8 +328,49 @@ restart the collector. If settings still need applying, it completes that step
 and checks again. This does not start another learning run or send test commands
 to the inverter. A successful check confirms the collector's connection settings,
 not whether the manufacturer's cloud is currently updating its data.
-Start another active check only after restoration is confirmed. If recovery
-keeps failing, create a Support Archive and share it with the maintainer.
+If recovery keeps failing, create a Support Archive and share it with the
+maintainer.
+
+After a test command may have been sent, a **cloud protection hold** takes
+precedence over endpoint recovery. It survives cancellation, HA reload/restart
+and successful learning. Restoring an address, receiving HTTP success, token
+expiry or waiting does not prove that the cloud discarded an undelivered
+command. Do not manually reconnect the collector to the cloud or delete its
+protection files. Share a debug log and fresh Support Archive for review.
+
+When the saved protected session belongs to this entry and collector, and its
+normal local endpoint has not changed, the wizard can offer **Repeat learning
+with protection kept on**. Confirm the cloud-outage consent again. Home Assistant
+rechecks the live collector identity, endpoint and local telemetry, retains the
+original hold and journal, and opens a new fail-closed learning session. It does
+not rewrite the endpoint, clear the hold, or reconnect directly to the cloud.
+Cancellation or failure leaves local operation and the hold in place. Corrupt,
+legacy, foreign or unverified recovery records do not qualify for this action.
+
+Each retry has a separate trace and command owner; an old wizard cannot submit
+commands through the new session. A delayed cloud write is still possible and
+is filtered. Retry drafts require consistent samples for at least two distinct
+values; ambiguous or single-sample matches remain in the Support Archive rather
+than becoming controls. This is not proof that the cloud queue is empty, and
+drafts still require review and explicit activation. Do not use elapsed time or
+a successful retry as permission to reconnect directly to the cloud.
+
+There is one distinct recoverable case: the operation-owned SmartESS or
+DESSMonitor HTTPS connection fails **before the first HTTP control request**.
+Home Assistant closes and joins that worker, saves an exact no-request receipt,
+and archives the hold before restoring the previous endpoint normally. It does
+not retry the command. A later failure, partial send or lost reply cannot use
+this recovery. An interrupted no-request finalization can finish after restart.
+Older builds without this receipt need maintainer review of the complete run;
+the error text or elapsed time alone is not sufficient.
+
+An interrupted learning record from an older build also blocks automatic
+restoration and new active runs. This is conservative quarantine, not proof that
+an older run established the new permanent local route: that case needs review
+and may have unavailable local telemetry. Missing or corrupt protection evidence
+is not permission to resume. Read-only cloud analysis sends no test commands and
+remains available. This classic 0.3 hold is not Cloud Bridge and does not promise
+fresh cloud telemetry while commands are blocked.
 
 For ValueCloud, the Support Archive distinguishes HTTP, network, timeout and
 invalid-response failures, and keeps the original learning failure separately

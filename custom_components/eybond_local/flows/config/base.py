@@ -250,8 +250,9 @@ class ConfigFlowBaseMixin:
     async def _async_prepare_metadata_caches(self) -> None:
         """Prepare every JSON-backed detector input before flow-time detection.
 
-        The integration's domain ``async_setup`` does not run until the first
-        entry exists.  A fresh installation must therefore warm the same
+        The integration's domain ``async_setup`` may not have run before the
+        first scan (manual callback setup bootstraps it separately). A fresh
+        installation must therefore warm the same
         metadata catalogs from the config flow itself; otherwise the first scan
         reaches ``Path.read_text`` from Home Assistant's event loop.  Keep the
         complete preparation in one executor boundary, including the on-device

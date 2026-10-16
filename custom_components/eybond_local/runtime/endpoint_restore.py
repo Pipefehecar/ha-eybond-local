@@ -7,11 +7,17 @@ collector configuration, not the availability of the manufacturer's cloud.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from ..collector.management import CollectorManagementTransportError
 from ..collector_endpoint import resolve_collector_server_endpoint
 
 
 _TRANSPORT_ERRORS = (CollectorManagementTransportError, TimeoutError, OSError, EOFError)
+_RESTORE_RECONNECT_SECONDS = 75.0
+_RESTORE_RETRY_DELAY = 1.0
+_LOGGER = logging.getLogger(__name__)
 
 
 async def restore_collector_endpoint(
@@ -45,6 +51,29 @@ async def restore_collector_endpoint(
             raise RuntimeError("restore_apply_state_invalid")
         return observed, route == expected, pending
 
+    async def read_after_apply():
+        # Applying settings can reboot the collector and change its wire dialect.
+        # A failed short callback attempt is not the deadline for that reboot.
+        # Reuse the normal exact-PN management path on EACH attempt, which selects
+        # the adapter from the current owned session. Never retry the write/apply.
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        attempt = 0
+        try:
+            async with asyncio.timeout(_RESTORE_RECONNECT_SECONDS):
+                while True:
+                    attempt += 1
+                    try:
+                        return await read()
+                    except _TRANSPORT_ERRORS as exc:
+                        _LOGGER.debug(
+                            "Endpoint restore awaiting live readback attempt=%s elapsed=%.1fs error=%s",
+                            attempt, loop.time() - started, type(exc).__name__,
+                        )
+                        await asyncio.sleep(_RESTORE_RETRY_DELAY)
+        except TimeoutError as exc:
+            raise TimeoutError("collector_endpoint_restore_reconnect_timeout") from exc
+
     try:
         observed, matches, pending = await read()
     except _TRANSPORT_ERRORS:
@@ -75,7 +104,7 @@ async def restore_collector_endpoint(
         pass
 
     await reconnect()
-    observed, matches, pending = await read()
+    observed, matches, pending = await read_after_apply()
     if not matches:
         raise RuntimeError("restore_live_endpoint_mismatch")
     if pending == "1" or (pending == "" and not apply_confirmed):

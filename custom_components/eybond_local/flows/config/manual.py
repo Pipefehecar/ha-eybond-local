@@ -39,6 +39,7 @@ from ...const import (
     CONNECTION_STRATEGY_INBOUND,
     DEFAULT_DRIVER_DETECTION_STRATEGY,
     DRIVER_DETECTION_STRATEGIES,
+    DOMAIN,
 )
 from ..common.presentation import (
     MANUAL_CONFIRM_ACTION_EDIT_SETTINGS,
@@ -163,6 +164,17 @@ class ManualCollectorFlowMixin:
         On any failure the flow is left holding nothing: no verified PN and no
         claim, so a stale identity can never leak into an entry.
         """
+
+        # A config flow can run before the first entry (and hence before domain
+        # setup). Bootstrap the normal HA-owned service, not a flow-private
+        # registry: all accepted sockets must be visible to the same authority.
+        if self._callback_session_registry() is None:
+            from homeassistant.setup import async_setup_component
+
+            if not await async_setup_component(self.hass, DOMAIN, {}):
+                return "callback_listener_unavailable"
+            if self._callback_session_registry() is None:
+                return "callback_listener_unavailable"
 
         # The DECLARED expectation (passive discovery / an entry's stored PN) is
         # durable and gates every attempt; one a previous attempt of this flow
@@ -698,8 +710,13 @@ class ManualCollectorFlowMixin:
         if not self._manual_config:
             return await self.async_step_manual()
 
-        self._callback_continuation.release_unadopted_recovery()
-        self._callback_continuation.release_terminal_owner()
+        # Editing ends the old owner. Never run another identity attempt on its
+        # CLOSED transaction, or carry an identity learned by that attempt into
+        # a different route. Only the originally declared expectation survives.
+        expected_pn = self._manual_declared_expected_pn
+        if expected_pn is None:
+            expected_pn = self._callback_continuation.identity_context.expected_pn
+        self._replace_manual_callback_continuation(expected_pn=expected_pn)
         self._manual_defaults = dict(self._manual_config)
         self._manual_result = None
         if self._repair_entry_id:

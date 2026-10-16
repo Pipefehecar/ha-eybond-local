@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 # Typed outcomes. These are translation keys / status values, never raw text.
 IDENTITY_OK = ""
 IDENTITY_TIMEOUT = "callback_timeout"
+IDENTITY_LISTENER_UNAVAILABLE = "callback_listener_unavailable"
 # A TCP session ARRIVED inside our causal window but volunteered neither wire
 # nor identity before the deadline. Deliberately distinct from
 # IDENTITY_TIMEOUT ("nothing arrived"): calling a live-but-silent socket "the
@@ -639,6 +640,16 @@ async def async_run_callback_identity_transaction(
             return CallbackIdentityOutcome(result=IDENTITY_TRIGGER_NOT_SENT)
         if outcome.identity_certified and outcome.session_id:
             retained_sessions.add(outcome.session_id)
+        logger.debug(
+            "Callback identity completed result=%s certified=%s wire=%s "
+            "source=%s pn_length=%d silent_offer=%s",
+            outcome.result or "identified",
+            outcome.identity_certified,
+            outcome.session_protocol or "unknown",
+            outcome.identity_source or "none",
+            len(outcome.collector_pn),
+            outcome.silent_bootstrap_offer is not None,
+        )
         return outcome
 
 
@@ -683,11 +694,23 @@ async def _async_run_attempt(
         # Cleanup starts with acquisition, not with session waiting: a cancelled
         # or failed trigger must also return this channel's listener reference.
         await probe_channel.async_open()
+        if not probe_channel.available:
+            # Do not redirect a collector to a socket we failed to open.
+            return CallbackIdentityOutcome(result=IDENTITY_LISTENER_UNAVAILABLE)
 
         baseline = frozenset(
             session["session_id"] for session in _session_views(hass) if session["session_id"]
         )
         pending_baseline = probe_channel.snapshot_silent_session_ids()
+        logger.debug(
+            "Callback identity started strategy=%s port=%d baseline=%d "
+            "silent_baseline=%d bootstrap=%s",
+            strategy,
+            request.tcp_port,
+            len(baseline),
+            len(pending_baseline),
+            bootstrap.protocol if bootstrap is not None else "none",
+        )
 
         # --- 3. exactly one trigger, or none ---------------------------------
         # The bootstrap CONTINUATION owns no new causal window: the silent socket
@@ -734,6 +757,14 @@ async def _async_run_attempt(
             probe_channel=probe_channel,
             pending_baseline=pending_baseline,
             bootstrap=bootstrap,
+        )
+        logger.debug(
+            "Callback identity session wait selected=%s silent_seen=%s "
+            "silent_offer=%s failure=%s",
+            session is not None,
+            silent_seen,
+            bool(offer_session_id),
+            wait_failure or "none",
         )
         offer = (
             SilentSessionBootstrapOffer(session_id=offer_session_id)
@@ -896,6 +927,7 @@ __all__ = [
     "IDENTITY_AMBIGUOUS",
     "IDENTITY_CONFLICT",
     "IDENTITY_MISMATCH",
+    "IDENTITY_LISTENER_UNAVAILABLE",
     "IDENTITY_OK",
     "IDENTITY_TARGET_REQUIRED",
     "IDENTITY_TIMEOUT",

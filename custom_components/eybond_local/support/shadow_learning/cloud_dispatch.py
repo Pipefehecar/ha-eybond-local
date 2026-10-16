@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
 from typing import Any, Callable
+
+from ..owned_worker import async_run_owned_worker
 
 
 async def async_dispatch_cloud_action(
@@ -18,19 +18,19 @@ async def async_dispatch_cloud_action(
     completed, keeping the fail-closed shadow route active in the meantime.
     """
 
-    task = asyncio.create_task(asyncio.to_thread(callable_, **kwargs))
-    pending_cancel: asyncio.CancelledError | None = None
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as exc:
-            if pending_cancel is None:
-                pending_cancel = exc
-    if pending_cancel is not None:
-        with suppress(Exception):
-            task.result()
-        raise pending_cancel
-    return task.result()
+    return await async_run_owned_worker(callable_, **kwargs)
 
 
-__all__ = ["async_dispatch_cloud_action"]
+async def async_confirm_owned_action_not_sent(callable_, action_kwargs) -> bool:
+    """Provider boundary: only exact clients with an owned HTTP resource qualify."""
+    from ...cloud_http_session import CloudHttpSession
+    from ...smartess_cloud import fetch_signed_action
+    from ...dessmonitor_cloud import send_device_control
+
+    http = action_kwargs.get("http_session")
+    if type(http) is not CloudHttpSession or callable_ not in (fetch_signed_action, send_device_control):
+        return False
+    return await async_run_owned_worker(http.close_and_confirm_no_request)
+
+
+__all__ = ["async_dispatch_cloud_action", "async_confirm_owned_action_not_sent"]

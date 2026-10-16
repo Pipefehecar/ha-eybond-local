@@ -807,7 +807,9 @@ class ShadowLearningBackendTests(unittest.TestCase):
         events: list[tuple[str, object]] = []
 
         class _Handler:
-            def __init__(self, *, upstream_host, upstream_port, seed, output_path) -> None:
+            def __init__(self, *, upstream_host, upstream_port, seed, output_path, expected_session_protocol) -> None:
+                if expected_session_protocol != "at_text":
+                    raise AssertionError("The shadow socket must use the known collector wire")
                 events.append(("handler_init", (upstream_host, upstream_port, output_path)))
                 self.running = False
                 self.ready = False

@@ -20,6 +20,21 @@ from .common import (
 class HubLifecycleMixin:
     """Methods owned by HubLifecycleMixin."""
 
+    def shadow_learning_route_owned_by(self, *, entry_id: str, owner_id: str) -> bool:
+        """Read live temporary-route ownership; readiness alone is not ownership."""
+
+        if any(type(value) is not str or not value or value != value.strip()
+               for value in (entry_id, owner_id)):
+            return False
+        lease = self._link_manager.route_lease
+        return bool(
+            lease is not None
+            and lease.mode == "shadow_learning"
+            and lease.entry_id == entry_id
+            and lease.owner_id == owner_id
+            and lease.state == "running"
+        )
+
     @property
     def detected_inverter(self) -> DetectedInverter | None:
         """Return the currently bound detected inverter, if any.
@@ -201,8 +216,10 @@ class HubLifecycleMixin:
         """
 
         handover = self._session_handover_active()
-        attempts = _SESSION_HANDOVER_MAX_GENERATIONS if handover else 1
-        for attempt in range(attempts):
+        # The generation can change DURING the initial ordinary attempt. Keep
+        # the loop's capacity independent of the initial handover flag; the
+        # evidence gate below still prevents retries for an ordinary outage.
+        for attempt in range(_SESSION_HANDOVER_MAX_GENERATIONS):
             generation = self._owned_session_generation()
             attempt_timeout = (
                 max(float(timeout), _SESSION_HANDOVER_CONNECT_TIMEOUT)
@@ -391,6 +408,9 @@ class HubLifecycleMixin:
     ) -> None:
         """Start one in-process proxy capture route on the active runtime link."""
 
+        guard = getattr(self, "_collector_mutation_guard", None)
+        if guard is not None:
+            await guard()
         route_kwargs = {
             "collector_ip": collector_ip,
             "collector_pn": collector_pn,
@@ -449,9 +469,21 @@ class HubLifecycleMixin:
         upstream_port: int,
         output_path,
         seed,
+        protected_retry_permit=None,
     ) -> None:
         """Start one in-process shadow-learning route on the active runtime link."""
 
+        guard = getattr(self, "_collector_mutation_guard", None)
+        if protected_retry_permit is not None:
+            from ...connection.protected_learning_route import ProtectedLearningRoutePermit
+            if type(protected_retry_permit) is not ProtectedLearningRoutePermit:
+                raise RuntimeError("cloud_learning_retry_permit_invalid")
+            await protected_retry_permit.consume(
+                entry_id=entry_id, owner_id=owner_id, collector_pn=collector_pn,
+                listen_port=listen_port, upstream_host=upstream_host, upstream_port=upstream_port,
+            )
+        elif guard is not None:
+            await guard()
         route_kwargs = {
             "collector_ip": collector_ip,
             "collector_pn": collector_pn,

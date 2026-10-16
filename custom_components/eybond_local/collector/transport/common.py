@@ -553,6 +553,11 @@ class CollectorTransport(PayloadLinkTransport, Protocol):
     async def disconnect(self) -> None:
         ...
 
+    async def async_disconnect_owned_session(
+        self, *, session_id: str, listener_port: int, owns_session: Callable[[], bool],
+    ) -> None:
+        ...
+
     async def async_send_forward(
         self,
         payload: bytes,

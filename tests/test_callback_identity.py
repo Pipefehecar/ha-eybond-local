@@ -17,7 +17,7 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -47,6 +47,22 @@ SHORT_PN = "V001020SYN6"  # a real prefix of FULL_PN
 OTHER_FULL_PN = "V000405SYN94677058"
 NAT_IP = "192.0.2.55"
 SERVER_IP = "192.0.2.10"
+
+
+def setUpModule():
+    """Bind simulation lasts across concurrent attempts, not per coroutine.
+
+    The production-wire suites run in their own module with real sockets.
+    Module cleanup restores the factories before those tests start.
+    """
+    unittest.enterModuleContext(patch(
+        "custom_components.eybond_local.collector.transport._acquire_shared_listener",
+        new=AsyncMock(return_value=object()),
+    ))
+    unittest.enterModuleContext(patch(
+        "custom_components.eybond_local.collector.transport._release_shared_listener",
+        new=AsyncMock(),
+    ))
 
 
 def _observed(session_id, pn="", *, state="routed_framed", shape="eybond_framed", port=18899, peer_ip=NAT_IP):
@@ -218,6 +234,30 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
         return outcome, registry
 
     # 1 -----------------------------------------------------------------
+    async def test_identity_diagnostics_report_outcome_without_device_identifiers(self) -> None:
+        with self.assertLogs(
+            "custom_components.eybond_local.connection.callback_identity", level="DEBUG"
+        ) as logs:
+            outcome, _ = await self._run([_observed("s-private-session", FULL_PN)])
+        self.assertTrue(outcome.identity_certified)
+        diagnostic_text = "\n".join(logs.output)
+        self.assertIn("Callback identity started", diagnostic_text)
+        self.assertIn("port=18899", diagnostic_text)
+        self.assertIn("selected=True", diagnostic_text)
+        self.assertIn("result=identified certified=True", diagnostic_text)
+        for private_value in (FULL_PN, NAT_IP, SERVER_IP, "s-private-session"):
+            self.assertNotIn(private_value, diagnostic_text)
+
+    async def test_identity_diagnostics_distinguish_no_callback(self) -> None:
+        with self.assertLogs(
+            "custom_components.eybond_local.connection.callback_identity", level="DEBUG"
+        ) as logs:
+            outcome, _ = await self._run([], request=_request(session_wait_timeout=0.01))
+        self.assertEqual(outcome.result, IDENTITY_TIMEOUT)
+        diagnostic_text = "\n".join(logs.output)
+        self.assertIn("selected=False silent_seen=False", diagnostic_text)
+        self.assertIn("result=callback_timeout certified=False", diagnostic_text)
+
     async def test_success_yields_full_pn_and_certified_handoff(self) -> None:
         sessions = [_observed("s-new", FULL_PN)]
         outcome, registry = await self._run(sessions)
@@ -515,13 +555,12 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
                 live.sessions.append(_observed("s-b", OTHER_FULL_PN))
 
         async def _a():
-            with _no_probe_scope():
-                return await async_run_callback_identity_transaction(
-                    hass,
-                    _request(session_wait_timeout=1.0),
-                    reader=_Reader(pn=FULL_PN),
-                    sender=_LateCollector(),
-                )
+            return await async_run_callback_identity_transaction(
+                hass,
+                _request(session_wait_timeout=1.0),
+                reader=_Reader(pn=FULL_PN),
+                sender=_LateCollector(),
+            )
 
         async def _b():
             await asyncio.wait_for(a_triggered.wait(), timeout=1.0)
@@ -551,7 +590,9 @@ class CallbackIdentityTransactionTests(unittest.IsolatedAsyncioTestCase):
                         with suppress(asyncio.CancelledError):
                             await task
 
-        a_outcome, b_outcome = await _both(_a(), _b())
+        # One outer scope lives until BOTH concurrent attempts finish.
+        with _no_probe_scope():
+            a_outcome, b_outcome = await _both(_a(), _b())
 
         # A owns the late session its own trigger caused ...
         self.assertTrue(a_outcome.identity_certified, a_outcome.result)
@@ -1500,9 +1541,16 @@ class OnboardingWireBootstrapTests(unittest.IsolatedAsyncioTestCase):
         live = _Live(())
         listener = self._FakeListener(live)
         sender = _Sender(on_send=lambda: listener.silent.append("s-silent"))
-        outcome, registry = await self._run(
-            listener=listener, request=_request(), sender=sender
-        )
+        with self.assertLogs(
+            "custom_components.eybond_local.connection.callback_identity", level="DEBUG"
+        ) as logs:
+            outcome, registry = await self._run(
+                listener=listener, request=_request(), sender=sender
+            )
+        diagnostic_text = "\n".join(logs.output)
+        self.assertIn("selected=False silent_seen=True", diagnostic_text)
+        self.assertIn("result=callback_session_silent certified=False", diagnostic_text)
+        self.assertNotIn("s-silent", diagnostic_text)
 
         self.assertEqual(outcome.result, IDENTITY_SESSION_SILENT)
         self.assertEqual(outcome.silent_bootstrap_offer.session_id, "s-silent")

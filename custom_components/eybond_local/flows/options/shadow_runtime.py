@@ -251,6 +251,10 @@ class ShadowLearningRuntimeMixin:
         connected = bool(getattr(coordinator.data, "connected", False))
         start_blocker = getattr(coordinator, "async_shadow_learning_start_blocker", None)
         restore_blocker = await start_blocker() if callable(start_blocker) else ""
+        if restore_blocker == "cloud_learning_protection_held":
+            retry_check = getattr(coordinator, "async_shadow_learning_retry_available", None)
+            if callable(retry_check) and await retry_check() is True:
+                restore_blocker = ""
         raw_capture = None
         if connected and not restore_blocker:
             with suppress(Exception):

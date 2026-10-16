@@ -58,9 +58,13 @@ def _free_tcp_port() -> int:
 
 
 @pytest.mark.timeout(180)
+@pytest.mark.parametrize("full_pn", [FULL_PN, "QE600000000001"])
 async def test_active_scan_silent_callback_full_ha_lifecycle(
-    hass: HomeAssistant, socket_enabled
+    hass: HomeAssistant, socket_enabled, full_pn: str
 ) -> None:
+    # A genuine 14-character PN is not a truncated 18-character identity.
+    # Like the issue #59 collector, it must still be certified through FC2,
+    # then survive the real entry handoff, unload and silent reconnect below.
     from unittest.mock import patch
 
     from fake_collector import FakeCollectorService
@@ -94,7 +98,7 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
         udp_reply="",
         scenario=resolve_scenario(
             preset="collector_only",
-            profile=CollectorProfile(pn=FULL_PN),
+            profile=CollectorProfile(pn=full_pn),
             set_29_mode="reboot_silent",
             first_heartbeat_delay=3600.0,  # FULLY silent from first contact
             pi30_mode="success",
@@ -332,11 +336,11 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
             entry = next(
                 e
                 for e in hass.config_entries.async_entries(DOMAIN)
-                if e.unique_id == f"collector:{FULL_PN}"
+                if e.unique_id == f"collector:{full_pn}"
             )
             await hass.async_block_till_done()
             assert entry.state is ConfigEntryState.LOADED
-            assert registry.owner_for_pn(FULL_PN) == entry.entry_id
+            assert registry.owner_for_pn(full_pn) == entry.entry_id
 
             # ---- 4-5. real coordinator/runtime; evidence via entry update -
             coordinator = entry.runtime_data
@@ -364,44 +368,49 @@ async def test_active_scan_silent_callback_full_ha_lifecycle(
                 == "live_session"
             )
 
-            # ---- 6. unload + reload through the REAL HA lifecycle --------
-            assert await hass.config_entries.async_unload(entry.entry_id)
-            await hass.async_block_till_done()
-            assert entry.state is ConfigEntryState.NOT_LOADED
+            # ---- 6-8. Repeat the REAL lifecycle, not just a first reconnect.
+            # Every round starts with a new fully silent socket and must regain
+            # exact PN ownership without losing the user's connection settings.
+            # Discovery may legitimately add collector metadata on later polls;
+            # only user polling/control choices must remain byte-for-byte equal.
+            option_keys = ("poll_mode", "poll_interval", "control_mode")
+            original_options = {key: entry.options.get(key) for key in option_keys}
+            for cycle in range(3):
+                assert await hass.config_entries.async_unload(entry.entry_id)
+                await hass.async_block_till_done()
+                assert entry.state is ConfigEntryState.NOT_LOADED
 
-            # The collector genuinely lost its link while HA was down (the
-            # pcap sequence); the next attempt gets a fresh FULLY SILENT
-            # socket the persisted-evidence FC=2 probe must identify.
-            await service._close_tcp_only()
-            service._last_discovery = None
-            service.pre_rx_heartbeats = 0
+                await service._close_tcp_only()
+                service._last_discovery = None
+                service.pre_rx_heartbeats = 0
 
-            assert await hass.config_entries.async_setup(entry.entry_id)
-            await hass.async_block_till_done()
-            assert entry.state is ConfigEntryState.LOADED
+                assert await hass.config_entries.async_setup(entry.entry_id)
+                await hass.async_block_till_done()
+                assert entry.state is ConfigEntryState.LOADED
 
-            # ---- 7-8. silent socket -> active FC=2 -> connected + PI30 ---
-            coordinator = entry.runtime_data
-            deadline = asyncio.get_running_loop().time() + 45.0
-            while True:
-                await coordinator.async_refresh()
-                snapshot = coordinator.data
-                if (
-                    snapshot is not None
-                    and snapshot.connected
-                    and snapshot.has_runtime_value("battery_voltage")
-                ):
-                    break
-                assert (
-                    asyncio.get_running_loop().time() < deadline
-                ), f"silent reconnect never settled: {getattr(snapshot, 'last_error', None)}"
-                await asyncio.sleep(0.5)
+                coordinator = entry.runtime_data
+                deadline = asyncio.get_running_loop().time() + 45.0
+                while True:
+                    await coordinator.async_refresh()
+                    snapshot = coordinator.data
+                    if (
+                        snapshot is not None
+                        and snapshot.connected
+                        and snapshot.has_runtime_value("battery_voltage")
+                    ):
+                        break
+                    assert (
+                        asyncio.get_running_loop().time() < deadline
+                    ), f"silent reconnect {cycle} never settled: {getattr(snapshot, 'last_error', None)}"
+                    await asyncio.sleep(0.5)
 
-            # Zero unsolicited bytes before the reconnect probe, and the live
-            # values really came from a valid PI30 poll.
-            assert getattr(service, "pre_rx_heartbeats", 0) == 0
-            assert snapshot.runtime_value("battery_voltage") > 0
-            assert "battery_voltage" not in snapshot.values
+                assert getattr(service, "pre_rx_heartbeats", 0) == 0
+                assert snapshot.runtime_value("battery_voltage") > 0
+                assert "battery_voltage" not in snapshot.values
+                assert registry.owner_for_pn(full_pn) == entry.entry_id
+                assert {key: entry.options.get(key) for key in option_keys} == original_options
+                assert entry.data["collector_ip"] == ROUTE_IP
+                assert entry.data["connection_strategy"] == "callback_on_demand"
     finally:
         if entry is not None and entry.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(entry.entry_id)

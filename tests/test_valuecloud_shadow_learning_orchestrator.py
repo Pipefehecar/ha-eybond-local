@@ -454,7 +454,7 @@ class ValueCloudShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["plan"][0]["transport"], "legacy_ctrlDevice")
         self.assertEqual(result["captured_not_applied_count"], 1)
 
-    def test_definitive_rejection_still_correlates_observed_write(self) -> None:
+    def test_cloud_error_still_correlates_observed_write(self) -> None:
         observation = ShadowWriteObservation(
             timestamp="2026-06-29T12:00:00+00:00",
             source="shadow_learning",

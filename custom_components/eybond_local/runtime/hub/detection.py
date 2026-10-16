@@ -172,6 +172,15 @@ class HubDetectionMixin:
         self._link_baud_sweep_generation = detection_generation
 
         try:
+            guard = getattr(self, "_collector_mutation_guard", None)
+            if guard is not None:
+                from ...connection.cloud_learning_protection import CloudLearningProtectionRequired
+                try:
+                    await guard()
+                except CloudLearningProtectionRequired:
+                    # A UART change may apply all staged collector settings.
+                    # Keep ordinary detection/read-only polling, skip mutation.
+                    return None
             adapter = self._collector_management_adapter(active_only=True)
             channel = RuntimeLinkBaudChannel(
                 adapter,

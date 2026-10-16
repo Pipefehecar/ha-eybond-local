@@ -9,6 +9,44 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- Protected Shadow Learning can be explicitly repeated while retaining the
+  original cloud protection hold. An exact local identity/endpoint/telemetry
+  check precedes each new filtered route; prior journals are archived, ownership
+  changes atomically, and stale wizards cannot send through the new session.
+  No endpoint rewrite or direct cloud return is permitted. Retry drafts exclude
+  ambiguous and single-sample write correlations; original evidence is retained.
+
+- Cloud-tool handoff drains the confirmed collector's existing primary and
+  callback sockets before waiting for a new connection. The fixed session
+  baseline excludes newly arrived sockets, weak identities and other collectors
+  sharing the same IP; ownership is rechecked before each disconnect.
+
+- Classic active Shadow Learning now requires explicit cloud-outage consent and
+  a verified permanent local route before sending test commands. A durable
+  command-intent journal and independent per-collector hold are persisted before
+  the first request across SmartESS, DESSMonitor and ValueCloud. Completion,
+  cancellation and HA restart preserve the local route instead of automatically
+  reconnecting to the cloud. Successful results can still be applied; cloud
+  telemetry/control remain disabled pending reviewed recovery. Interrupted
+  legacy sessions are quarantined rather than silently resumed. Read-only
+  analysis does not arm this protection. This is not Cloud Bridge.
+
+- Active Shadow Learning verifies the exact collector PN on each new proxy
+  socket, using the existing known-wire identity probes before opening the
+  upstream cloud connection. Cached metadata, short heartbeats and a different
+  collector cannot authorize cloud test commands. Proxy teardown joins both
+  forwarding tasks before closing trace files, including repeated cancellation.
+  These checks do not establish settlement of queued cloud commands.
+
+- Debug logs report callback identity attempt stages and typed outcomes,
+  distinguishing no incoming session, a silent session and a failed identity
+  probe. Runtime reconnects also report the selected probe and identity source,
+  without including collector identifiers or packet contents in these summaries.
+
+- The device-learning guide distinguishes endpoint restoration from settlement
+  of a cloud test command whose delivery is unknown. A restored connection alone
+  is not clearance to repeat active learning after such a failure.
+
 - Aninerel ANL-4200T-24L-W-PRO gains five captured numeric controls: four SOC
   thresholds and maximum discharge-current protection (#60). They remain
   untested and require Full Control unless already activated through learning.
@@ -115,6 +153,75 @@ the GitHub release body should be rendered from the matching version section her
   this is not full device or control support (#45).
 
 ### Fixed
+
+- SmartESS/DESSMonitor learning now distinguishes a confirmed zero-request
+  connection failure from an uncertain submitted command. Exact no-request
+  receipts allow normal endpoint recovery, survive interrupted finalization,
+  and archive the original hold for review. No command is automatically retried;
+  earlier requests, partial sends, lost responses and unknown legacy runs remain
+  held. A maintainer-only audit tool records reviewed no-send evidence for old
+  builds without pretending to settle cloud commands.
+
+- A cloud-learning protection hold no longer blocks the support-expansion menu
+  from reaching read-only cloud analysis. Ordinary active starts and direct cloud
+  restoration remain blocked; only the explicit protected retry described above
+  can start a new active run. Opening the menu does not weaken the hold. A failed
+  read-only request shows its actual error alongside the existing hold notice,
+  instead of presenting that hold as the cause of an unrelated API failure.
+
+- Classic learning and endpoint restoration tolerate unsupported binary reboot
+  status on framed E500 firmware without treating it as a confirmed clear flag.
+  Existing endpoint readback and reset/recovery verification remain enforced.
+  A textual `0` no longer blocks the local learning handoff.
+- Configured callback ports stay visible to the domain session registry for the
+  loaded entry's lifetime, including custom ports. A foreign entry probing a
+  shared listener no longer invalidates another collector's confirmed identity.
+- A transport pinned to a new collector session now activates that exact socket
+  instead of falling back to an older live connection with the same PN/IP during
+  reset recovery. This applies to framed and AT management/payload paths.
+- Framed collector replies match the requested parameter as well as transaction
+  and function, so buffered identity replies cannot complete endpoint requests
+  during handoff. Learning dispatch also retains live proxy identity evidence
+  through the coordinator status projection.
+
+- Endpoint restoration waits for live management readback after a collector
+  restart, with a bounded reconnect window and no repeated endpoint write or
+  apply command. A session replacement beginning during the first connection
+  attempt now receives the existing bounded handover recovery (#46).
+- AT replies must match the pending command on both AT and mixed framed
+  sessions. Unsolicited identity/metadata replies no longer complete a different
+  management read or acknowledge a different write.
+- Shadow Learning recovery records are replaced atomically; cancellation waits
+  for the filesystem worker before cleanup. Finalization preserves a historical,
+  owner-scoped outcome before clearing the matching active record. Support
+  archives distinguish verified endpoint readback from explicit discard and
+  failed-start cleanup; none of these proves cloud-command settlement.
+
+- Manual callback setup starts the shared listener service on first installation,
+  and editing connection settings creates a fresh verification attempt instead
+  of reusing a closed one (#62). A failed TCP bind is reported as a local listener
+  error without sending a callback request to the collector.
+
+- SmartESS/DESSMonitor active learning stops on the vendor's `ERR_TIMEOUT`
+  response without sending the next test command. An API error response is no
+  longer described as proof of definitive non-delivery; captured proxy writes
+  remain available for correlation, and the persistent protection described
+  above remains after the temporary learning route stops.
+
+- Learning failure messages no longer claim that the collector's cloud
+  connection was restored without evidence. The setup guide and README explicitly
+  explain the continuing cloud outage, including after successful learning.
+
+- Cancelling an active cloud-learning request now remains cancellation if its
+  blocking HTTP worker subsequently fails. The worker is still drained before
+  cleanup; its late error no longer changes the caller's cancellation path or
+  produces an abandoned-shield exception on Python 3.14.
+
+- Active learning HTTP dispatch shares the coordinator's stop/unload boundary
+  and rechecks the original study owner, collector identity, route and saved
+  protection before sending. An old dialog cannot borrow a replacement study's
+  route. This serialization is not proof of cloud-command settlement or a
+  completed durable offline/local handoff.
 
 - Completed inverter control writes and presets wait for the Home Assistant
   state refresh instead of leaving it queued behind the refresh debounce timer

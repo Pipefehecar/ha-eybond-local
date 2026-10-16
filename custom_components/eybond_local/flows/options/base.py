@@ -452,7 +452,11 @@ class OptionsFlowBase(_TranslationBundleMixin, OptionsFlow):
                     "Ensure the entry is loaded, then try again.",
                 ),
             )
-        if await self._async_control_discovery_restore_pending(coordinator):
+        # This menu does not authorize a route change or a cloud command. Keep
+        # read-only analysis reachable under a hold; active steps recheck it.
+        if await self._async_control_discovery_restore_pending(
+            coordinator, allow_read_only_selection=True,
+        ):
             return await self.async_step_shadow_learning_result()
         if not self._cloud_tools_menu_available(coordinator):
             return await self._async_cloud_tools_unavailable()

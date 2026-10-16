@@ -540,6 +540,10 @@ class ConfigNetworkFlowMixin:
             getattr(result, "last_error", "") if result is not None else ""
         ).strip()
         callback_failure_summaries = {
+            "callback_listener_unavailable": (
+                "common.dynamic.manual_probe_callback_listener_unavailable",
+                "Home Assistant could not start the callback listener. Check the local IP and TCP port, then retry.",
+            ),
             "callback_timeout": (
                 "common.dynamic.manual_probe_callback_timeout",
                 "The collector did not call back during this attempt.",

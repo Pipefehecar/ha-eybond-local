@@ -309,6 +309,10 @@ def _flatten_sections(user_input: dict[str, Any]) -> dict[str, Any]:
 
 
 _RECOVERY_FAILURE_EXPLANATIONS = {
+    "callback_listener_unavailable": (
+        "common.dynamic.manual_probe_callback_listener_unavailable",
+        "Home Assistant could not start the callback listener. Check the local IP and TCP port, then retry.",
+    ),
     # The selected-route admission screen owns both the callback-identity phase
     # and the recovery phase.  Identity failures must remain honest here instead
     # of falling through to the generic recovery message.

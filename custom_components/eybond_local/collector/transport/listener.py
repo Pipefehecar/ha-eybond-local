@@ -1178,7 +1178,10 @@ class _SharedEybondListener:
                 if self._collector_pn_matches(normalized_pn, pending_pn):
                     return self._claim_pending_socket(pending)
                 if pending_pn:
-                    self._mark_session_state(pending.session_id, "route_identity_mismatch")
+                    # This requester is not the owner; the socket may still be
+                    # perfectly valid for another entry on the shared listener.
+                    # Do not poison its observed identity for the domain registry.
+                    self._mark_session_state(pending.session_id, "identified")
                 else:
                     self._mark_session_state(pending.session_id, "waiting_for_route_identity")
                 # The pause above cancelled the sniff task; the socket stays

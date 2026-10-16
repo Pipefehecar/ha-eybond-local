@@ -698,7 +698,7 @@ async def test_normal_inbound_entry_has_no_repair_and_sends_no_udp(
 
 @pytest.mark.timeout(30)
 async def test_coordinator_recovery_state_splits_trigger_and_listener_bind(
-    socket_enabled,
+    socket_enabled, tmp_path,
 ) -> None:
     """Batch 8B.2A: with a NON-DEFAULT server_ip the coordinator writes the
     recovery state's trigger_bind_host (UDP = server_ip) and listener_bind_host
@@ -716,6 +716,7 @@ async def test_coordinator_recovery_state_splits_trigger_and_listener_bind(
     from custom_components.eybond_local.runtime.coordinator import (
         EybondLocalCoordinator,
     )
+    from custom_components.eybond_local.support.shadow_learning.protection_store import CloudLearningMutationFence
 
     probe = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
     probe.bind(("127.0.0.1", 0))
@@ -723,6 +724,7 @@ async def test_coordinator_recovery_state_splits_trigger_and_listener_bind(
     probe.close()
 
     coordinator = object.__new__(EybondLocalCoordinator)
+    coordinator._cloud_learning_mutation_fence = CloudLearningMutationFence(tmp_path, FULL_PN)
     coordinator.config_entry = types.SimpleNamespace(
         entry_id="entry-split-1",
         data={"collector_pn": FULL_PN, "connection_strategy": "inbound"},
@@ -1566,7 +1568,7 @@ async def test_loaded_repair_unload_raises_partial_is_restored(
             # Restored to LOADED; the repair never began.
             assert result["type"] is FlowResultType.MENU, result
             assert target.state is ConfigEntryState.LOADED           # restored
-            assert ensure_calls == []                                # 0 ensure
+            assert len(ensure_calls) == 1                            # Restored runtime only.
             assert ledger.snapshot_generation() == gen_before        # 0 UDP
             assert target.data == original_data                      # 0 commit
             assert RecoveryContract.from_entry_data(target.data) is None
@@ -1611,8 +1613,14 @@ async def test_loaded_repair_ensure_raises_after_suspend_restores(
             gen_before = ledger.snapshot_generation()
             discovery = get_passive_callback_discovery(hass)
 
+            orig_ensure = discovery.async_ensure_observed_listener
+            failed = False
             async def _boom_ensure(host, port):
-                raise RuntimeError("simulated ensure failure")
+                nonlocal failed
+                if not failed:
+                    failed = True
+                    raise RuntimeError("simulated ensure failure")
+                return await orig_ensure(host, port)  # Restored runtime lease.
 
             stack.enter_context(
                 patch.object(discovery, "async_ensure_observed_listener", _boom_ensure)
@@ -2171,7 +2179,7 @@ async def test_loaded_repair_cancelled_inside_unload_restores_entry(
             assert target.options == original_options
             assert CONF_STRATEGY_TRANSITION_STATE in target.data
             assert RecoveryContract.from_entry_data(target.data) is None
-            assert ensure_calls == []                              # 0 ensure
+            assert len(ensure_calls) == 1                          # Restored runtime only.
             assert ledger.snapshot_generation() == gen_before      # 0 UDP / commit
             # The progress task ended with CancelledError (not a normal completion).
             assert repair_tasks, "repair progress task was not captured"

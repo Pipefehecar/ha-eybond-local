@@ -19,6 +19,9 @@ from custom_components.eybond_local.collector.parameter_registry import (
 )
 from custom_components.eybond_local.collector.protocol import EybondHeader
 from custom_components.eybond_local.collector.smartess_local import SmartEssLocalSession
+from custom_components.eybond_local.collector.collector_wire import (
+    decode_reboot_required, parse_query_collector_response,
+)
 
 
 class _FakeCollectorTransport:
@@ -47,6 +50,34 @@ class _FakeCollectorTransport:
 
 
 class CollectorParameterRegistryTests(unittest.TestCase):
+    def test_reboot_flag_requires_original_explicit_ascii_payload(self) -> None:
+        for payload, expected in (
+            (b"\x00\x1e0", "0"), (b"\x00\x1e1", "1"),
+            (b"\x00\x1e\x001\r\n", "1"),
+            (b"\x00\x1e\x10\x28\x03", ""),  # live E500 FC2 reply
+            (b"\x00\x1e\xff1", ""),  # lossy text would misleadingly be "1"
+            (b"\x00\x1e\x01", ""), (b"\x00\x1e", ""),
+            (b"\x00\x1e2", ""), (b"\x01\x1e1", ""),
+            (b"\x00\x151", ""),
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(decode_reboot_required(parse_query_collector_response(payload)), expected)
+
+    def test_unknown_flag_is_partial_metadata_not_dead_transport_or_false_flag(self) -> None:
+        transport = _FakeCollectorTransport({
+            (2, b"\x1e"): b"\x00\x1e\x10\x28\x03",
+            (2, b"\x29"): b"\x00\x29Lab WiFi",
+        })
+        result = asyncio.run(read_runtime_collector_values(
+            SmartEssLocalSession(transport), parameters=tuple(
+                COLLECTOR_PARAMETER_DEFINITION_BY_ID[p] for p in (30, 41))))
+        self.assertEqual(result.values, {"collector_ssid": "Lab WiFi"})
+        self.assertEqual(result.outcome, "partial")
+        self.assertEqual(result.safe_error_code, "collector_reboot_status_unrecognized")
+        self.assertEqual((result.attempted_commands, result.successful_commands, result.failed_commands), (2, 1, 1))
+        self.assertFalse(result.is_strike or result.is_delivery_failure)
+        self.assertFalse(result.unsupported_semantic_fields)
+
     def test_router_password_is_never_part_of_runtime_collector_reads(self) -> None:
         password_parameter = COLLECTOR_PARAMETER_DEFINITION_BY_ID[43]
 

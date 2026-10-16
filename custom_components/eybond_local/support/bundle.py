@@ -20,6 +20,7 @@ _RUNTIME_DIAGNOSTIC_VALUE_PREFIXES = (
     "integration_",
     "runtime_",
     "support_workflow_",
+    "cloud_learning_protection_",
 )
 _RUNTIME_DIAGNOSTIC_VALUE_KEYS = frozenset(
     {

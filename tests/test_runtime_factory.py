@@ -64,6 +64,7 @@ class RuntimeFactoryTests(unittest.TestCase):
             driver_hint="auto",
             driver_detection_strategy="first_match",
             connection_mode="known_ip",
+            collector_mutation_guard=None,
         )
 
 

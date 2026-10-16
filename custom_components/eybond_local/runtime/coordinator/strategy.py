@@ -524,6 +524,13 @@ class CoordinatorStrategyTransitionMixin:
             await self._runtime_operation_lock.acquire()
             runtime_operation_locked = True
 
+            if await self._async_cloud_learning_hold_reason():
+                return StrategyTransitionResult(
+                    success=False,
+                    target_strategy=target,
+                    failure_reason="cloud_learning_protection_held",
+                )
+
             registry = get_callback_session_registry(self.hass)
             spec = self._connection_spec
             inbound_listener_port = int(getattr(spec, "tcp_port", 0) or 0)

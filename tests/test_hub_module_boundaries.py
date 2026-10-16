@@ -33,7 +33,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_MULTISET_SHA256 = (
-    "3b7bcf18a0ec78be716d726188552155a03697517ae17f7826a117cabdb657ea"
+    "982e38f9910e7381865635000d7b74209c6f0190666c400508e72eac75e2e9b0"
 )
 
 
@@ -97,8 +97,9 @@ class HubCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         payload = "\n".join(f"{name}:{count}" for name, count in sorted(counts.items()))
-        self.assertEqual(sum(counts.values()), 109)
-        self.assertEqual(len(counts), 104)
+        self.assertEqual(sum(counts.values()), 110)
+        self.assertEqual(len(counts), 105)
+        self.assertEqual(owners["shadow_learning_route_owned_by"], {"lifecycle.py"})
         self.assertEqual(
             hashlib.sha256(payload.encode()).hexdigest(),
             EXPECTED_METHOD_MULTISET_SHA256,

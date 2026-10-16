@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Callable, Protocol
 
 from ..metadata.smartess_protocol_catalog_loader import load_smartess_protocol_catalog
-from .collector_wire import CollectorQueryResponse, CollectorWireError
+from .collector_wire import CollectorQueryResponse, CollectorWireError, decode_reboot_required
 from .metadata_result import (
     OUTCOME_COMMAND_ERROR,
     OUTCOME_EMPTY,
@@ -71,6 +71,14 @@ def _decode_text_value(key: str, *, max_len: int = 255) -> CollectorValueDecoder
         return {key: _normalized_query_text(response, max_len=max_len)}
 
     return _decode
+
+
+def _decode_reboot_required(response: CollectorQueryResponse) -> dict[str, object]:
+    value = decode_reboot_required(response)
+    if not value:
+        raise CollectorWireError("collector_reboot_status_unrecognized")
+    return {"collector_reboot_required": value}
+
 
 def _decode_network_diagnostics(response: CollectorQueryResponse) -> dict[str, object]:
     text = _normalized_query_text(response)
@@ -136,7 +144,7 @@ COLLECTOR_PARAMETER_DEFINITIONS: tuple[CollectorParameterDefinition, ...] = (
     CollectorParameterDefinition(21, "domain_address_1", "Primary cloud domain / server address.", risky_write=True, decode=_decode_text_value("collector_server_endpoint"), semantic_fields=frozenset({"collector_server_endpoint"})),
     CollectorParameterDefinition(25, "timezone", "Collector timezone.", risky_write=True),
     CollectorParameterDefinition(29, "system_operation", "Apply / restart / system action trigger.", risky_write=True),
-    CollectorParameterDefinition(30, "reboot_required", "Reboot / pending-apply status.", risky_write=True, decode=_decode_text_value("collector_reboot_required"), semantic_fields=frozenset({"collector_reboot_required"})),
+    CollectorParameterDefinition(30, "reboot_required", "Reboot / pending-apply status when returned as an explicit flag.", risky_write=True, decode=_decode_reboot_required, semantic_fields=frozenset({"collector_reboot_required"})),
     CollectorParameterDefinition(32, "transmission_mode", "RTU / URTU transmission mode.", risky_write=True, decode=_decode_text_value("collector_transmission_mode"), semantic_fields=frozenset({"collector_transmission_mode"})),
     CollectorParameterDefinition(34, "serial_baudrate", "Serial port baudrate.", risky_write=True, decode=_decode_text_value("collector_serial_baudrate"), semantic_fields=frozenset({"collector_serial_baudrate"})),
     CollectorParameterDefinition(
@@ -253,13 +261,22 @@ async def read_runtime_collector_values(
             # Well-formed "unsupported/not-set" -> skip, not a failure.
             unsupported_semantic_fields.update(definition.semantic_fields)
             continue
-        decoded = present_metadata_values(
-            {
-                key: value
-                for key, value in definition.decode(response).items()
-                if key not in excluded_semantic_fields
-            }
-        )
+        try:
+            decoded = present_metadata_values(
+                {
+                    key: value
+                    for key, value in definition.decode(response).items()
+                    if key not in excluded_semantic_fields
+                }
+            )
+        except CollectorWireError as exc:
+            # A well-framed value can still lack a confirmed semantic encoding.
+            # Report that separately from unsupported/delivery failure, and keep
+            # reading independent metadata on this live channel.
+            command_failed = True
+            failed += 1
+            safe_code = safe_code or str(exc).split(":", 1)[0]
+            continue
         if decoded:
             merge_collector_signal_values(values, decoded)
             successful += 1

@@ -60,6 +60,16 @@ def bounded_shadow_learning_artifact_path(
 
 
 LOCALIZED_RUNTIME_TEXT: dict[str, dict[str, str]] = {
+    "cloud_learning_hold_title": {
+        "en": "EyeBond Local: cloud learning protection",
+        "ru": "EyeBond Local: защита после облачного обучения",
+        "uk": "EyeBond Local: захист після хмарного навчання",
+    },
+    "cloud_learning_hold_body": {
+        "en": "Automatic cloud reconnection and new active learning are blocked because earlier test commands may remain queued. Do not reconnect the collector to the cloud manually or delete protection files. Local HA is not blocked, but an interrupted older run may need connection recovery. Successfully learned controls can still be applied. Download a Support Archive from Expand device support for maintainer review. Dismissing this notification does not release protection.",
+        "ru": "Автоматическое подключение к облаку и новое активное обучение заблокированы: ранее отправленные тестовые команды могут оставаться в очереди. Не подключайте коллектор к облаку вручную и не удаляйте файлы защиты. Локальный HA не блокируется, но прерванное обучение старой версии может требовать восстановления связи. Успешно изученные контролы можно применить. Скачайте архив поддержки в разделе расширения поддержки устройства для проверки с разработчиком. Закрытие уведомления не снимает защиту.",
+        "uk": "Автоматичне підключення до хмари та нове активне навчання заблоковані: раніше надіслані тестові команди можуть залишатися в черзі. Не підключайте колектор до хмари вручну й не видаляйте файли захисту. Локальний HA не блокується, але перерване навчання старої версії може потребувати відновлення зв’язку. Успішно вивчені контроли можна застосувати. Завантажте архів підтримки в розділі розширення підтримки пристрою для перевірки з розробником. Закриття сповіщення не знімає захист.",
+    },
     "proxy_capture_notification_title": {
         "en": "EyeBond Local Collector Capture",
         "ru": "EyeBond Local: захват трафика коллектора",

@@ -295,6 +295,7 @@ async def async_orchestrate_dessmonitor_shadow_learning(
     action: Callable[..., DessMonitorApiEnvelope] = send_device_control,
     http_session=None,
     on_progress: Callable[[int, int], None] | None = None,
+    dispatch_action: Callable[..., Awaitable[Any]] = async_dispatch_cloud_action,
 ) -> dict[str, Any]:
     """Correlate explicit DESSMonitor actions with writes on the exact route."""
 
@@ -337,6 +338,7 @@ async def async_orchestrate_dessmonitor_shadow_learning(
         wait_until_session_ready,
         read_map_snapshot,
         on_progress,
+        dispatch_action,
     ):
         if callback is not None and not callable(callback):
             raise TypeError("dessmonitor_learning_callback_invalid")
@@ -393,7 +395,7 @@ async def async_orchestrate_dessmonitor_shadow_learning(
         attempt["requested_at"] = utc_now_iso()
         started = time.monotonic()
         try:
-            envelope = await async_dispatch_cloud_action(
+            envelope = await dispatch_action(
                 action,
                 session=session,
                 identity=identity,
@@ -414,8 +416,13 @@ async def async_orchestrate_dessmonitor_shadow_learning(
                 "desc": envelope.desc,
             }
         except DessMonitorActionRejectedError as exc:
+            # https://api.dessmonitor.com/chapter4/sendCmdToDevice.html:
+            # ERR_TIMEOUT means no reply after dispatch, not proven cancellation.
+            if exc.err == 0x0002:
+                _LOGGER.warning("DESSMonitor command timed out: delivery indeterminate")
+                raise
             attempt["status"] = _STATUS_ERROR
-            attempt["delivery_outcome"] = "definitive_rejection"
+            attempt["delivery_outcome"] = "cloud_error_response"
             attempt["cloud_duration_ms"] = _elapsed_ms(started)
             attempt["cloud_rejection"] = {
                 "err": exc.err,

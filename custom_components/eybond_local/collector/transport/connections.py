@@ -8,7 +8,10 @@ from dataclasses import replace
 from time import monotonic
 from typing import Any, Callable
 
-from ..at import CollectorAtResponse, build_at_query, build_at_write, parse_at_response
+from ..at import (
+    CollectorAtResponse, build_at_query, build_at_write,
+    normalize_at_command, parse_at_command, parse_at_response,
+)
 from ..identity_probe import build_identity_probe_request, parse_identity_probe_response
 from ..cloud_family import (
     apply_collector_cloud_family_observation,
@@ -21,6 +24,7 @@ from ..protocol import (
     FC_FORWARD_TO_DEVICE,
     FC_HEARTBEAT,
     FC_QUERY_COLLECTOR,
+    FC_SET_COLLECTOR,
     HEADER_SIZE,
     TIDCounter,
     build_collector_request,
@@ -100,7 +104,9 @@ class _CollectorConnection:
         self._connected = asyncio.Event()
         self._pending: dict[int, asyncio.Future[tuple[EybondHeader, bytes]]] = {}
         self._pending_fcode: dict[int, int] = {}
+        self._pending_parameter: dict[int, int] = {}
         self._pending_at_response: asyncio.Future[CollectorAtResponse] | None = None
+        self._pending_at_command = ""
         self._request_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._tid = TIDCounter()
@@ -238,6 +244,8 @@ class _CollectorConnection:
             future: asyncio.Future[tuple[EybondHeader, bytes]] = loop.create_future()
             self._pending[tid] = future
             self._pending_fcode[tid] = fcode
+            if (fcode == FC_QUERY_COLLECTOR and len(payload) == 1) or (fcode == FC_SET_COLLECTOR and payload):
+                self._pending_parameter[tid] = payload[0]
 
             try:
                 await self._async_write(frame, owner=owner)
@@ -257,6 +265,7 @@ class _CollectorConnection:
                 if self._pending.get(tid) is future:
                     self._pending.pop(tid, None)
                     self._pending_fcode.pop(tid, None)
+                    self._pending_parameter.pop(tid, None)
                 finish_request_future(future)
 
     async def async_probe_identity(self, probe_kind: str, *, request_timeout: float) -> tuple[str, str]:
@@ -302,6 +311,7 @@ class _CollectorConnection:
         return response
 
     async def async_query(self, command: str, *, request_timeout: float) -> CollectorAtResponse:
+        command = normalize_at_command(command)
         owner = SocketSendOwner.capture(self)
 
         async with self._request_lock:
@@ -309,6 +319,7 @@ class _CollectorConnection:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[CollectorAtResponse] = loop.create_future()
             self._pending_at_response = future
+            self._pending_at_command = command
             try:
                 await self._async_write(build_at_query(command), owner=owner)
                 response = await asyncio.wait_for(future, timeout=request_timeout)
@@ -316,6 +327,7 @@ class _CollectorConnection:
             finally:
                 if self._pending_at_response is future:
                     self._pending_at_response = None
+                    self._pending_at_command = ""
                 finish_request_future(future)
             self._apply_at_response_metadata(response)
             return response
@@ -327,6 +339,7 @@ class _CollectorConnection:
         *,
         request_timeout: float,
     ) -> CollectorAtResponse:
+        command = normalize_at_command(command)
         owner = SocketSendOwner.capture(self)
 
         async with self._request_lock:
@@ -334,6 +347,7 @@ class _CollectorConnection:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[CollectorAtResponse] = loop.create_future()
             self._pending_at_response = future
+            self._pending_at_command = command
             try:
                 await self._async_write(build_at_write(command, value), owner=owner)
                 response = await asyncio.wait_for(future, timeout=request_timeout)
@@ -341,6 +355,7 @@ class _CollectorConnection:
             finally:
                 if self._pending_at_response is future:
                     self._pending_at_response = None
+                    self._pending_at_command = ""
                 finish_request_future(future)
             self._apply_at_response_metadata(response)
             return response
@@ -470,7 +485,7 @@ class _CollectorConnection:
             return
 
         future = self._pending_at_response
-        if future is not None and not future.done():
+        if future is not None and not future.done() and response.command == self._pending_at_command:
             self._last_liveness_monotonic = monotonic()
             future.set_result(response)
             return
@@ -620,9 +635,16 @@ class _CollectorConnection:
                         self._record_session_identity(pn, "fc2_parameter_2")
                 future = self._pending.get(header.tid)
                 expected_fcode = self._pending_fcode.get(header.tid)
+                expected_parameter = self._pending_parameter.get(header.tid)
                 correlated = (
                     future is not None and not future.done()
                     and header.fcode == expected_fcode
+                    # A replayed identity reply can reuse a freshly allocated
+                    # TID after socket handoff. It is still PN evidence, not an
+                    # endpoint read/write acknowledgement. Malformed responses
+                    # remain visible to the command decoder.
+                    and (expected_parameter is None or len(payload) < 2
+                         or payload[1] == expected_parameter)
                 )
                 if header.fcode == FC_HEARTBEAT or correlated:
                     self._last_liveness_monotonic = observed_at
@@ -708,9 +730,11 @@ class _CollectorConnection:
                 future.set_exception(ConnectionError("collector_disconnected"))
         self._pending.clear()
         self._pending_fcode.clear()
+        self._pending_parameter.clear()
 
         at_future = self._pending_at_response
         self._pending_at_response = None
+        self._pending_at_command = ""
         if at_future is not None and not at_future.done():
             at_future.set_exception(ConnectionError("collector_disconnected"))
 
@@ -755,10 +779,12 @@ class _CollectorAtConnection:
         self._request_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._pending_response: asyncio.Future[CollectorAtResponse] | None = None
+        self._pending_at_command = ""
         self._pending_raw_response: asyncio.Future[bytes] | None = None
         self._pending_raw_protocol = ""
         self._pending_framed_response: dict[int, asyncio.Future[tuple[EybondHeader, bytes]]] = {}
         self._pending_framed_fcode: dict[int, int] = {}
+        self._pending_framed_parameter: dict[int, int] = {}
         self._tid = TIDCounter()
         self._collector = CollectorInfo(remote_ip=remote_ip_hint)
         self._session_id = ""
@@ -1019,6 +1045,8 @@ class _CollectorAtConnection:
             future: asyncio.Future[tuple[EybondHeader, bytes]] = loop.create_future()
             self._pending_framed_response[tid] = future
             self._pending_framed_fcode[tid] = int(fcode)
+            if (fcode == FC_QUERY_COLLECTOR and len(payload) == 1) or (fcode == FC_SET_COLLECTOR and payload):
+                self._pending_framed_parameter[tid] = payload[0]
             try:
                 await self._async_write(frame, owner=owner)
                 response = await asyncio.wait_for(future, timeout=request_timeout)
@@ -1029,6 +1057,7 @@ class _CollectorAtConnection:
                 if self._pending_framed_response.get(tid) is future:
                     self._pending_framed_response.pop(tid, None)
                     self._pending_framed_fcode.pop(tid, None)
+                    self._pending_framed_parameter.pop(tid, None)
                 finish_request_future(future)
 
     async def _async_wait_raw_passthrough_spacing_locked(self) -> int:
@@ -1052,9 +1081,11 @@ class _CollectorAtConnection:
     ) -> CollectorAtResponse:
         owner = owner or SocketSendOwner.capture(self)
         owner.check(self)
+        command = parse_at_command(payload).command
         loop = asyncio.get_running_loop()
         future: asyncio.Future[CollectorAtResponse] = loop.create_future()
         self._pending_response = future
+        self._pending_at_command = command
         try:
             await self._async_write(payload, owner=owner)
             response = await asyncio.wait_for(future, timeout=request_timeout)
@@ -1062,6 +1093,7 @@ class _CollectorAtConnection:
         finally:
             if self._pending_response is future:
                 self._pending_response = None
+                self._pending_at_command = ""
             finish_request_future(future)
         self._apply_response_metadata(response)
         return response
@@ -1401,10 +1433,13 @@ class _CollectorAtConnection:
                     else:
                         future = self._pending_framed_response.get(header.tid)
                         expected_fcode = self._pending_framed_fcode.get(header.tid)
+                        expected_parameter = self._pending_framed_parameter.get(header.tid)
                         if (
                             future is not None
                             and not future.done()
                             and expected_fcode == header.fcode
+                            and (expected_parameter is None or len(payload) < 2
+                                 or payload[1] == expected_parameter)
                         ):
                             future.set_result((header, payload))
                             continue
@@ -1426,27 +1461,7 @@ class _CollectorAtConnection:
                     continue
 
                 line = prefix + await read(reader.readuntil(b"\n"))
-                try:
-                    response = parse_at_response(line)
-                except Exception:
-                    logger.debug(
-                        "Unhandled collector AT payload remote=%s payload=%r",
-                        self._collector.remote_ip,
-                        line,
-                    )
-                    continue
-                future = self._pending_response
-                if future is not None and not future.done():
-                    future.set_result(response)
-                    continue
-
-                self._apply_response_metadata(response)
-                logger.debug(
-                    "Unsolicited collector AT response remote=%s command=%s value=%s",
-                    self._collector.remote_ip,
-                    response.command,
-                    response.value,
-                )
+                self._handle_at_response_line(line)
         except BinaryFramingError as exc:
             self._collector.last_disconnect_reason = str(exc)
             logger.warning("Closing collector binary session remote=%s reason=%s",
@@ -1525,7 +1540,7 @@ class _CollectorAtConnection:
             )
             return
         future = self._pending_response
-        if future is not None and not future.done():
+        if future is not None and not future.done() and response.command == self._pending_at_command:
             future.set_result(response)
             return
 
@@ -1590,6 +1605,7 @@ class _CollectorAtConnection:
         # Do not let old wait_closed()/reader cleanup cancel a newer session.
         future = self._pending_response
         self._pending_response = None
+        self._pending_at_command = ""
         if future is not None and not future.done():
             future.set_exception(ConnectionError("collector_disconnected"))
 
@@ -1604,6 +1620,7 @@ class _CollectorAtConnection:
                 framed_future.set_exception(ConnectionError("collector_disconnected"))
         self._pending_framed_response.clear()
         self._pending_framed_fcode.clear()
+        self._pending_framed_parameter.clear()
 
         if writer:
             try:

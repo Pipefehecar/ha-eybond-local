@@ -58,7 +58,7 @@ EXPECTED_MRO = [
 ]
 
 EXPECTED_METHOD_SET_SHA256 = (
-    "222acbfa670307ce13b02f2461d30bb5d5d9546807d7309ae4b5e72c99c4118b"
+    "b59b835a9392fd1feed8aa6302e51ed986ec5c79ad71b7a23c03fa8da81047c1"
 )
 
 
@@ -120,12 +120,17 @@ class CoordinatorCompositionBoundaryTests(unittest.TestCase):
         duplicates = {name: paths for name, paths in owners.items() if len(paths) != 1}
         self.assertEqual(duplicates, {})
         digest = hashlib.sha256("\n".join(sorted(owners)).encode()).hexdigest()
-        self.assertEqual(len(owners), 301)
+        self.assertEqual(len(owners), 309)
+        for method in ("_async_observe_runtime_listener", "_async_release_runtime_listener_observation"):
+            self.assertEqual(owners[method], ["lifecycle.py"])
         self.assertEqual(owners["_async_shadow_learning_recovery_diagnostics"], ["support.py"])
         for method in (
             "_async_cloud_tool_preparation", "_async_cancel_cloud_tool_preparation",
             "_async_start_proxy_capture_exclusive", "_async_start_shadow_learning_exclusive",
             "shadow_learning_restore_pending", "async_shadow_learning_start_blocker",
+            "_async_cloud_learning_hold_reason", "_async_require_cloud_learning_unheld",
+            "_publish_cloud_learning_hold",
+            "async_dispatch_shadow_learning_cloud_action",
         ):
             self.assertEqual(owners[method], ["cloud_tools.py"])
         self.assertEqual(

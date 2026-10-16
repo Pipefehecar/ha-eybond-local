@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+from pathlib import Path
 from typing import Any
 
 from homeassistant.components import persistent_notification
@@ -30,6 +31,7 @@ from ...drivers.registry import get_driver, poll_policy_for_driver_key
 from ...models import ProbeTarget, RuntimeSnapshot
 from ...support.diagnostic_runner import DiagnosticSingleFlight
 from ...support.local_register_collection import LocalRegisterCollectionManager
+from ...support.shadow_learning.protection_store import CloudLearningMutationFence
 from ...timeout_policy import DEFAULT_ONBOARDING_TIMEOUT_POLICY
 from .cloud_tools import CoordinatorCloudToolsMixin
 from .collector_profile import CoordinatorCollectorProfileMixin
@@ -129,11 +131,15 @@ class EybondLocalCoordinator(
             or driver_detection_strategy not in DRIVER_DETECTION_STRATEGIES
         ):
             driver_detection_strategy = DEFAULT_DRIVER_DETECTION_STRATEGY
+        self._cloud_learning_mutation_fence = CloudLearningMutationFence(
+            Path(hass.config.config_dir), connection_spec.collector_pn,
+        )
         self._runtime: RuntimeManager = create_runtime_manager(
             connection_spec,
             driver_hint=runtime_driver_key,
             driver_detection_strategy=driver_detection_strategy,
             connection_mode=entry.data.get(CONF_CONNECTION_MODE, ""),
+            collector_mutation_guard=self._cloud_learning_mutation_fence.require_unheld,
         )
         # The runtime inverter is built from built-in detection and never carries the
         # learned overlay capabilities on its own. Give the runtime a hook so that, once

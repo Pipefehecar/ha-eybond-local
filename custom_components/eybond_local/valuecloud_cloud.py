@@ -71,7 +71,7 @@ class ValueCloudError(RuntimeError):
 
 
 class ValueCloudActionRejectedError(ValueCloudError):
-    """A completed ValueCloud action request with a definitive rejection."""
+    """An API error response, not proof that command delivery is terminal."""
 
     def __init__(self, *, code: int | None, action: str, detail: str) -> None:
         self.code = code

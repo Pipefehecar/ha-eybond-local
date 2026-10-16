@@ -355,7 +355,8 @@ class CollectorOperatingProfileArchitectureTests(unittest.TestCase):
 
         self.assertIn("support_acquisition_readiness", shadow_start)
         self.assertIn("active_control_learning", shadow_start)
-        self.assertIn("async_set_collector_server_endpoint", shadow_start)
+        self.assertIn("async_prepare_local_learning_route", shadow_start)
+        self.assertLess(shadow_start.index("async_prepare_local_learning_route"), shadow_start.index("async_start_shadow_learning_route"))
         self.assertIn("restore_required", shadow_start)
         self.assertIn("support_acquisition_readiness", proxy_start)
         self.assertIn("proxy_capture", proxy_start)

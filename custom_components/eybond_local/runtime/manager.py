@@ -181,6 +181,7 @@ class RuntimeManager(Protocol):
         upstream_port: int,
         output_path: Any,
         seed: Any,
+        protected_retry_permit: Any = None,
     ) -> None:
         ...
 

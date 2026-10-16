@@ -90,6 +90,11 @@ async def test_pnless_entry_options_explain_reconfigure_without_io(hass, pending
 @pytest.mark.parametrize("interface_present", [True, False])
 async def test_repair_preserves_available_saved_interface(hass, interface_present):
     """Repair must not silently advertise the host's default-route interface."""
+    from homeassistant.setup import async_setup_component
+
+    # Model an existing installation: its domain service already owns the
+    # callback registry, even while this particular entry is not loaded.
+    assert await async_setup_component(hass, DOMAIN, {})
     saved_ip = "198.51.100.10"
     interfaces = [{"name": "eth0", "ip": SYNTHETIC_SERVER_IP, "label": "Default interface",
                    "network": "192.0.2.0/24", "broadcast": SYNTHETIC_BROADCAST}]

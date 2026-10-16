@@ -92,18 +92,29 @@ transaction. Stop and recovery paths never depend on start readiness: once a
 route-owning operation exists, its exact cleanup path remains reachable even if
 the current start preconditions are no longer true.
 
-Active learning uses one explicit consent boundary for the complete critical
-operation: temporarily changing the collector cloud endpoint to the local
-shadow route, asking the selected cloud API to send bounded test commands,
-capturing and blocking the corresponding local writes, and restoring the
-previous endpoint. A cloud success without an exact post-action local
+Active learning requires explicit interception and cloud-outage consent. It
+verifies a permanent local endpoint, then temporarily adds a filtered cloud
+route to that listener before asking the selected API for bounded test commands.
+The local writes are captured and blocked. Before the first command, both the
+command intent and an independent per-PN protection hold are durable. After
+that point, even successful completion retains the local endpoint rather than
+restoring the direct cloud connection. A cloud success without an exact post-action local
 observation is treated as a possible unproxied write and stops the run.
 
-A persisted `restoring` or `restore_failed` session blocks another active run
-before capture, redirect, or cloud commands. The result screen retains the
-actual restoration status and exposes a retry of the existing endpoint
-transaction, without credentials or another learning run. Only confirmed
-restoration releases that obligation; a restart or a failed retry does not.
+A persisted recovery record blocks an ordinary new active run. Recovery before
+any possible cloud test command may restore the saved endpoint; a protection
+hold takes precedence and survives cancellation, success and restart. An exact
+operation-owned no-request receipt is the only automatic retirement path, and
+cannot retire an earlier run's hold. Interrupted legacy records are quarantined.
+
+An explicit protected retry can retain the original hold while checking the
+same entry, PN, local endpoint and fresh payload. It archives the previous
+journal, transfers ownership atomically and consumes a single-use exact-route
+permit. No endpoint write or direct cloud return is allowed. Old wizards lose
+dispatch authority; ambiguous and single-sample retry correlations remain
+support evidence. The fixed baseline of strong owned sockets is drained for
+handoff; new arrivals, weak identities and foreign same-IP sessions are not.
+Endpoint confirmation and a completed retry are not proof of cloud queue drain.
 
 Restoration and startup both drain and exclude ordinary polling using the
 coordinator's transient cloud-tool barrier. The persistent endpoint authority
@@ -125,11 +136,11 @@ This confirms collector configuration, not cloud-service telemetry availability.
 | Source | Executable method | Collector endpoint | Cloud writes | Result |
 | --- | --- | --- | --- | --- |
 | SmartESS API | Read-only evidence | Never changed | None | Typed semantic hints, bounded five-minute history and redacted support evidence |
-| SmartESS API | Active correlation | Temporary protected shadow route | Bounded control probes under explicit consent | Proven local read/control candidates |
-| ValueCloud API | Active local learning | Temporary protected shadow route | Bounded control probes under explicit consent | Proven local read/control candidates |
+| SmartESS API | Active correlation | Verified local endpoint retained; temporary filtered cloud route | Bounded control probes under explicit consent | Proven local read/control candidates |
+| ValueCloud API | Active local learning | Verified local endpoint retained; temporary filtered cloud route | Bounded control probes under explicit consent | Proven local read/control candidates |
 | DESSMonitor API | Read-only metadata collection | Never changed | None | Typed semantic hints, bounded history and redacted support evidence |
 | SmartClient / ShineMonitor | Read-only evidence | Never changed | None | Exact-identity generic PV data, setting descriptions, bounded history and raw evidence |
-| DESSMonitor API | Active correlation | Temporary protected shadow route | Bounded `ctrlDevice` probes under explicit consent | Exact post-action local-write evidence |
+| DESSMonitor API | Active correlation | Verified local endpoint retained; temporary filtered cloud route | Bounded `ctrlDevice` probes under explicit consent | Exact post-action local-write evidence |
 
 DESSMonitor's [official API](https://api.dessmonitor.com/chapter5/ctrlDevice.html)
 documents `ctrlDevice`. The active engine authenticates and resolves an exact

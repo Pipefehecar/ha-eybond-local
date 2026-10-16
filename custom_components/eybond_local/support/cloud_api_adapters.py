@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC
 
-from ..dessmonitor_cloud import DessMonitorCloudError
+from ..dessmonitor_cloud import DessMonitorActionRejectedError, DessMonitorCloudError
 from ..smartess_cloud import SmartEssCloudError, classify_smartess_cloud_error
 from ..smartclient_cloud import SmartClientCloudError
 from ..valuecloud_cloud import ValueCloudError
@@ -112,6 +112,8 @@ class DessMonitorCloudApiAdapter(CloudApiAdapter):
 
     def classify_error(self, exc: BaseException) -> str:
         if isinstance(exc, TimeoutError):
+            return "timeout"
+        if isinstance(exc, DessMonitorActionRejectedError) and exc.err == 0x0002:
             return "timeout"
         if not isinstance(exc, DessMonitorCloudError):
             return ""

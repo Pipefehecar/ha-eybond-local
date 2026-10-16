@@ -223,6 +223,18 @@ class FramedCollectorManagementAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.performed)
             self.assertIn((FC_SET_COLLECTOR, bytes((29,)) + b"1"), transport.calls)
 
+    async def test_unknown_secondary_reboot_flag_does_not_override_endpoint_or_action(self) -> None:
+        transport = _FakeFramedTransport()
+        transport.reboot_required = "\x10\x28\x03"
+        adapter = self._adapter(transport)
+        state = await adapter.async_read_endpoint_state()
+        self.assertEqual(state.current_endpoint, transport.endpoint)
+        self.assertEqual(state.reboot_required, "")
+        result = await adapter.async_reboot()
+        self.assertTrue(result.performed)
+        self.assertEqual(result.reboot_required_before, "")
+        self.assertEqual(transport.calls.count((FC_SET_COLLECTOR, bytes((29,)) + b"1")), 1)
+
     async def test_no_transport_is_unsupported(self) -> None:
         with self.assertRaises(CollectorManagementUnsupportedError):
             await FramedCollectorManagementAdapter(lambda: None).async_read_endpoint_state()

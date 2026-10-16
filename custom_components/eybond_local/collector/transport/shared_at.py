@@ -660,12 +660,9 @@ class SharedCollectorAtTransport:
                     self._collector_raw_passthrough_min_interval_ms
                 )
                 return connection
-            if not self._collector_ip and not self._collector_pn:
-                # Session-pinned-ONLY transport (the callback identity read):
-                # never substitute the "current" arbitrary AT socket for the
-                # claimed one. A claimed-but-parked socket is activated by the
-                # pop path, not resolved here.
-                return None
+            # PN/IP are not permission to substitute an older same-PN socket
+            # for a parked exact claim. The pop path activates that claim.
+            return None
         if self._collector_pn:
             connection = self._listener.ensure_at_connection(
                 "",
@@ -714,10 +711,8 @@ class SharedCollectorAtTransport:
             )
             if connection is not None:
                 return connection
-            if not self._collector_ip and not self._collector_pn:
-                # Session-pinned-ONLY transport: same exclusivity as
-                # _at_connection -- the claimed socket or nothing.
-                return None
+            # The framed management path must obey the same exact claim as AT.
+            return None
         if self._collector_pn:
             connection = self._listener.ensure_connection(
                 "",

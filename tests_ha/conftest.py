@@ -61,6 +61,16 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 
 @pytest.fixture(autouse=True)
+def isolated_persistent_config(hass, tmp_path, monkeypatch):
+    """Each synthetic HA owns its disk, including holds that must survive unload.
+
+    Never clear safety files as teardown: a new test models another installation,
+    while reload/restart tests keep the same directory within their own case.
+    """
+    monkeypatch.setattr(hass.config, "config_dir", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
 def no_host_network_scan():
     """Fake the host network enumeration boundary (an OS/network read).
 
@@ -95,7 +105,7 @@ def no_host_network_scan():
 
 
 @pytest.fixture(autouse=True)
-def no_passive_discovery_listeners():
+def no_passive_discovery_listeners(request):
     """Fake the passive-discovery listener boundary (it binds real sockets).
 
     `async_setup` starts the domain-level passive callback discovery, which opens
@@ -104,6 +114,10 @@ def no_passive_discovery_listeners():
     """
 
     from unittest.mock import AsyncMock, patch
+    from contextlib import ExitStack
+    from custom_components.eybond_local.passive_discovery import PassiveCallbackDiscovery
+
+    real_lifecycle = (PassiveCallbackDiscovery.async_start, PassiveCallbackDiscovery.async_stop)
 
     with (
         patch(
@@ -115,7 +129,22 @@ def no_passive_discovery_listeners():
             new=AsyncMock(return_value=None),
         ),
     ):
-        yield
+        with ExitStack() as stack:
+            # Socket-enabled acceptance tests exercise the real lease. The
+            # device-free lifecycle tests fake only its socket boundary.
+            if "socket_enabled" not in request.fixturenames or (
+                "fake_runtime" in request.fixturenames
+                and "real_runtime_listener_observation" not in request.fixturenames
+            ):
+                stack.enter_context(patch.object(
+                    PassiveCallbackDiscovery, "async_ensure_observed_listener",
+                    new=AsyncMock(return_value="synthetic-observation"),
+                ))
+                stack.enter_context(patch.object(
+                    PassiveCallbackDiscovery, "async_release_observed_listener",
+                    new=AsyncMock(),
+                ))
+            yield real_lifecycle
 
 
 class FakeRuntimeManager:
@@ -134,6 +163,10 @@ class FakeRuntimeManager:
         self.stopped = 0
 
     # --- addressing -------------------------------------------------------
+    @property
+    def listener_bind_host(self) -> str:
+        return "0.0.0.0"
+
     @property
     def effective_server_ip(self) -> str:
         return SYNTHETIC_SERVER_IP

@@ -617,10 +617,12 @@
         "title": "Expand device support",
         "description": "{control_discovery_hint}",
         "data": {
-          "shadow_learning_confirm_cloud_write": "Yes, temporarily reroute the collector, send bounded cloud test commands, and intercept them locally"
+          "shadow_learning_confirm_cloud_write": "Yes, temporarily reroute the collector, send bounded cloud test commands, and intercept them locally",
+          "shadow_learning_confirm_cloud_outage": "I agree that cloud telemetry and cloud control will remain disconnected after active learning"
         },
         "data_description": {
-          "shadow_learning_confirm_cloud_write": "Home Assistant temporarily changes the collector cloud endpoint. The selected cloud service sends bounded test commands; Home Assistant captures and blocks the matching local writes, then restores the previous endpoint."
+          "shadow_learning_confirm_cloud_write": "Home Assistant verifies the permanent local connection and intercepts test commands. After the first command, automatic return to the cloud is blocked, even on success or restart. Local Home Assistant remains available. There is no automatic timeout or self-service reset; safe cloud recovery requires review. Do not reconnect the collector to the cloud manually.",
+          "shadow_learning_confirm_cloud_outage": "Home Assistant verifies the permanent local connection and intercepts test commands. After the first command, automatic return to the cloud is blocked, even on success or restart. Local Home Assistant remains available. There is no automatic timeout or self-service reset; safe cloud recovery requires review. Do not reconnect the collector to the cloud manually."
         }
       },
       "shadow_learning_credentials": {

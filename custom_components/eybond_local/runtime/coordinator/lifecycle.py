@@ -18,8 +18,17 @@ class CoordinatorLifecycleMixin:
     async def async_setup(self) -> None:
         """Start the underlying hub."""
 
+        from .learning_recovery import async_preserve_interrupted_learning_hold
+
+        await async_preserve_interrupted_learning_hold(self)
+        # Read before runtime startup/recovery. A hold blocks cloud mutations,
+        # not ordinary local reads. Never infer permission from a cached absence.
+        hold_reason = await self._async_cloud_learning_hold_reason()
+        if hold_reason:
+            self._publish_cloud_learning_hold(hold_reason)
         self._configure_reverse_discovery_mode()
         self._configure_callback_ownership()
+        await self._async_observe_runtime_listener()
         await self._runtime.async_start()
         await self._async_activate_owned_callback_session_on_setup()
         if self.collector_callback_listener_required:
@@ -30,6 +39,31 @@ class CoordinatorLifecycleMixin:
         await self._async_recover_shadow_learning_state()
         await self._async_warm_smartess_cloud_evidence_cache()
         await self._async_warm_effective_metadata_cache()
+
+    async def _async_observe_runtime_listener(self) -> None:
+        """Keep the configured port visible to the domain owner for this entry.
+
+        Passive discovery's default ports are not the complete runtime port
+        set. Borrow the same listener for custom ports too, for the whole entry
+        lifetime (including learning handoff and subsequent reconnects).
+        """
+        from ...passive_discovery import get_passive_callback_discovery
+
+        discovery = get_passive_callback_discovery(self.hass)
+        if discovery is None or getattr(self, "_runtime_listener_observation", None):
+            return
+        token = await discovery.async_ensure_observed_listener(
+            self._runtime.listener_bind_host or "0.0.0.0",
+            self._connection_spec.tcp_port,
+        )
+        self._runtime_listener_observation = (discovery, token)
+
+    async def _async_release_runtime_listener_observation(self) -> None:
+        observation = getattr(self, "_runtime_listener_observation", None)
+        self._runtime_listener_observation = None
+        if observation is not None:
+            discovery, token = observation
+            await discovery.async_release_observed_listener(token)
 
     async def _async_activate_owned_callback_session_on_setup(self) -> bool:
         """Consume an exact permanent handoff before background refresh starts.
@@ -228,7 +262,13 @@ class CoordinatorLifecycleMixin:
                     exc,
                 )
             await self._async_stop_proxy_capture_process(force=True)
-            await self._runtime.async_stop()
+            try:
+                await self._runtime.async_stop()
+            finally:
+                _result, observation_cancel = await self._run_finalization_shielded(
+                    self._async_release_runtime_listener_observation
+                )
+                preparation_cancel = preparation_cancel or observation_cancel
         # Base-class teardown (debouncer shutdown, unschedule refresh) must
         # run too, or a queued request_refresh can still drive a poll against
         # the stopped link.

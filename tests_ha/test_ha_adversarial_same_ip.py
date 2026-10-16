@@ -192,6 +192,8 @@ async def test_scenario_a_foreign_baseline_then_target_success(
 
             async def _ensure_then_seat_b(host, port):
                 token = await orig_ensure(host, port)
+                if b_seated["token"]:
+                    return token  # Permanent runtime observation on activation.
                 before_ids = {
                     s.session_id for s in registry.observed_sessions_per_socket()
                 }
@@ -315,7 +317,8 @@ async def test_scenario_a_foreign_baseline_then_target_success(
             assert activation["after"]["live_sid"]
             assert activation["after"]["live_sid"] != b_seated["session_id"]
             assert b_seated["token"]
-            assert released_tokens == [b_seated["token"]]
+            assert b_seated["token"] in released_tokens
+            assert len(discovery._ensured_listeners) == 1  # Loaded runtime owns it.
 
             # ---- exactly two repair sequences (Phase A + Phase B) -----------
             assert _seqs("degraded_repair_bootstrap") == 2, [
@@ -457,7 +460,9 @@ async def test_scenario_b_only_foreign_pn_answers_is_typed_mismatch(
             # ---- causality/listener leases freed; exactly ONE Phase A (no B) --
             assert ledger.causality_owner() == ""
             assert _seqs("degraded_repair_bootstrap") == 1
-            assert ensured_tokens and released_tokens == ensured_tokens
+            assert ensured_tokens
+            assert set(ensured_tokens) - set(released_tokens) == set(discovery._ensured_listeners)
+            assert len(discovery._ensured_listeners) == 1  # Restored runtime lease.
     finally:
         if target.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(target.entry_id)
@@ -636,7 +641,9 @@ async def test_scenario_c_two_strong_pns_one_window_is_ambiguous(
                 if r.source == "degraded_repair_bootstrap"
                 and r.generation > gen_before
             ) == 1
-            assert ensured_tokens and released_tokens == ensured_tokens
+            assert ensured_tokens
+            assert set(ensured_tokens) - set(released_tokens) == set(discovery._ensured_listeners)
+            assert len(discovery._ensured_listeners) == 1  # Restored runtime lease.
     finally:
         if target.state is ConfigEntryState.LOADED:
             await hass.config_entries.async_unload(target.entry_id)

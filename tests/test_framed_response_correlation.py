@@ -106,17 +106,19 @@ class FramedResponseCorrelationTests(unittest.IsolatedAsyncioTestCase):
         for function in (3, 4):
             with self.subTest(function=function):
                 async with _session() as (connection, writer, reader):
+                    request_payload = b"\x15cloud.example.test,18899,TCP" if function == 3 else b"test"
+                    correct_reply = b"\x00\x15" if function == 3 else b"correct"
                     task = asyncio.create_task(connection.async_send_collector(
-                        fcode=function, payload=b"test", request_timeout=0.1,
+                        fcode=function, payload=request_payload, request_timeout=0.1,
                     ))
                     header = decode_header(await writer.frames.get())
                     reader.feed_data(
                         _reply(header.tid, 2, b"unrelated")
-                        + _reply(header.tid, function, b"correct")
+                        + _reply(header.tid, function, correct_reply)
                     )
                     response_header, payload = await task
                     self.assertEqual(response_header.fcode, function)
-                    self.assertEqual(payload, b"correct")
+                    self.assertEqual(payload, correct_reply)
                     self.assertFalse(connection._pending)
                     self.assertFalse(connection._pending_fcode)
 

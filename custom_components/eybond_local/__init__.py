@@ -292,11 +292,22 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     )
     from .passive_discovery import get_passive_callback_discovery
     from .support.cloud_evidence import remove_cloud_evidence_for_entry
+    from .support.shadow_learning.protection_store import CloudLearningMutationFence
+
+    config_dir = Path(hass.config.path())
+    collector_pn = str(entry.data.get(CONF_COLLECTOR_PN) or "").strip()
+    # Removal bypasses the hub: preserve holds and refuse unresolved reboots.
+    protection_reason = await CloudLearningMutationFence(config_dir, collector_pn).hold_reason()
 
     discovery = get_passive_callback_discovery(hass)
     if discovery is not None:
         ticket = discovery.take_entry_removal_ticket(entry.entry_id)
-        if ticket is not None:
+        if ticket is not None and protection_reason:
+            logger.warning(
+                "Collector removal skipped restart due to learning protection: %s",
+                protection_reason,
+            )
+        if ticket is not None and not protection_reason:
             try:
                 result = await async_finalize_collector_entry_removal(
                     ticket,
@@ -326,8 +337,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
                     result.disconnect_observed,
                 )
 
-    config_dir = Path(hass.config.path())
-    collector_pn = str(entry.data.get(CONF_COLLECTOR_PN) or "").strip()
     deleted = await hass.async_add_executor_job(
         partial(
             remove_cloud_evidence_for_entry,

@@ -96,6 +96,9 @@ class CoordinatorSupportMixin:
             getattr(self, "_cached_shadow_learning_session_state", None) is not None
         )
         values["shadow_learning_recovery_ui_pending"] = self.shadow_learning_restore_pending
+        protection_reason = await self._async_cloud_learning_hold_reason()
+        values["cloud_learning_protection_status"] = "held" if protection_reason else "no_marker"
+        values["cloud_learning_protection_reason"] = protection_reason
         return values
 
     @property

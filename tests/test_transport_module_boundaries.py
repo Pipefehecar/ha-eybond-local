@@ -82,6 +82,19 @@ class TransportModuleBoundaryTests(unittest.TestCase):
             for node in reader_class.body
         ), 1)
         definitions = [item for item in definitions if item != prefix_extension]
+        handoff_extension = ("AsyncFunctionDef", "async_disconnect_owned_session")
+        self.assertEqual(definitions.count(handoff_extension), 2)
+        owners = []
+        for path in _FAMILY:
+            for node in _tree(path).body:
+                if isinstance(node, ast.ClassDef) and any(
+                    isinstance(child, ast.AsyncFunctionDef) and child.name == handoff_extension[1]
+                    for child in node.body
+                ):
+                    owners.append((path.name, node.name))
+        self.assertCountEqual(owners, [("common.py", "CollectorTransport"),
+                                       ("shared_framed.py", "SharedEybondTransport")])
+        definitions = [item for item in definitions if item != handoff_extension]
         payload = "\n".join(
             f"{kind}:{name}" for kind, name in sorted(definitions)
         ).encode()

@@ -4153,6 +4153,72 @@ class RuntimeStateMachineTests(unittest.TestCase):
 
         asyncio.run(_run())
 
+    def test_handover_starting_during_management_connect_is_followed(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _OwnedSessionHandoverLinkManager()
+            hub._link_manager = link
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+            await hub.async_refresh(poll_interval=3.0)
+            link.connected = False
+            calls: list[float] = []
+
+            async def connect(*, timeout, require_heartbeat=False):
+                calls.append(timeout)
+                if len(calls) == 1:
+                    link.owned_session_generation += 1
+                    return False
+                link.connected = True
+                return True
+
+            with patch.object(link, "async_try_connect", new=connect):
+                self.assertTrue(
+                    await hub.async_ensure_collector_management_session(timeout=0.75)
+                )
+            self.assertEqual(calls, [0.75, 5.0])
+            # Management connectivity does not certify an inverter poll.
+            self.assertEqual(hub._stable_owned_session_generation, 1)
+
+        asyncio.run(_run())
+
+    def test_management_connect_without_replacement_does_not_retry(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _OwnedSessionHandoverLinkManager()
+            hub._link_manager = link
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+            await hub.async_refresh(poll_interval=3.0)
+            link.connected = False
+            with patch.object(link, "async_try_connect", new=AsyncMock(return_value=False)) as connect:
+                self.assertFalse(
+                    await hub.async_ensure_collector_management_session(timeout=0.75)
+                )
+            connect.assert_awaited_once_with(timeout=0.75, require_heartbeat=False)
+
+        asyncio.run(_run())
+
+    def test_management_handover_chain_remains_bounded(self) -> None:
+        async def _run() -> None:
+            hub = self._hub()
+            link = _OwnedSessionHandoverLinkManager()
+            hub._link_manager = link
+            hub.set_initial_inverter_binding(_SuccessDriver(), self._inverter())
+            await hub.async_refresh(poll_interval=3.0)
+            calls: list[float] = []
+
+            async def connect(*, timeout, require_heartbeat=False):
+                calls.append(timeout)
+                link.owned_session_generation += 1
+                return False
+
+            with patch.object(link, "async_try_connect", new=connect):
+                self.assertFalse(
+                    await hub.async_ensure_collector_management_session(timeout=0.75)
+                )
+            self.assertEqual(calls, [0.75, 5.0, 5.0])
+
+        asyncio.run(_run())
+
     def test_double_replacement_recovers_per_owned_session_generation(self) -> None:
         async def _run() -> None:
             hub = self._hub()

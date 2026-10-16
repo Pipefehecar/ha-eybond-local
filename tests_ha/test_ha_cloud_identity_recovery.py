@@ -141,6 +141,8 @@ async def test_pending_restore_blocks_learning_and_allows_explicit_recovery(
         upstream_endpoint=original, restore_required=True,
         started_at="2026-10-05T08:00:00+00:00",
         updated_at="2026-10-05T08:01:00+00:00", status=status,
+        # This is known pre-command recovery, not an uncertain legacy run.
+        protection_version=1, cloud_source="valuecloud", cloud_commands_possible=False,
     )
     await coordinator._async_save_shadow_learning_session_state(state)
     # Model a coordinator which has to load its recovery record from disk.

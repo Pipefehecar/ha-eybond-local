@@ -393,7 +393,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(loaded.restore_attempt_count, 2)
             self.assertEqual(loaded.last_restore_error, "collector_write_failed")
 
-            clear_shadow_learning_session_state(config_dir)
+            clear_shadow_learning_session_state(config_dir, expected_state=state, outcome="explicit_discard")
             self.assertIsNone(load_shadow_learning_session_state(config_dir))
 
     def test_restore_failure_state_survives_restart_roundtrip(self) -> None:
@@ -477,7 +477,7 @@ class ShadowLearningRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 status="restoring",
             )
             save_shadow_learning_session_state(config_dir=config_dir, state=state)
-            clear_shadow_learning_session_state(config_dir)
+            clear_shadow_learning_session_state(config_dir, expected_state=state, outcome="endpoint_verified")
             self.assertIsNone(load_shadow_learning_session_state(config_dir))
 
 

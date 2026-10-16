@@ -47,6 +47,7 @@ from .collector_wire import (
     SET_REBOOT_OR_APPLY,
     SET_SERIAL_BAUDRATE,
     SET_SERVER_ENDPOINT,
+    decode_reboot_required,
 )
 
 _AT_ENDPOINT_COMMAND = "CLDSRVHOST1"
@@ -452,9 +453,9 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
     ) -> str:
         """Read a secondary FLAG (e.g. reboot-required / previous endpoint).
 
-        Best-effort ONLY for an unsupported/non-zero secondary flag: a non-zero
-        code or a foreign parameter yields "" (the flag is treated as absent, not
-        as a failure). A transport OR parser failure is NOT best-effort -- it is
+        A non-zero code, a foreign parameter, or an unrecognized reboot-flag
+        value yields "" (this advisory value is unconfirmed, not an action
+        failure). A transport OR framing failure is NOT best-effort -- it is
         wrapped typed and DELIBERATELY interrupts the operation (a broken wire or a
         malformed frame is not "the flag is absent").
         """
@@ -462,6 +463,8 @@ class FramedCollectorManagementAdapter(CollectorManagementAdapter):
         response = await self._query(session, parameter)
         if getattr(response, "code", None) != 0 or getattr(response, "parameter", None) != parameter:
             return ""
+        if parameter == QUERY_REBOOT_REQUIRED:
+            return decode_reboot_required(response)
         return str(getattr(response, "text", "") or "").strip().strip("\x00")
 
     async def async_read_endpoint_state(self) -> CollectorEndpointState:

@@ -231,6 +231,26 @@ class SharedEybondTransport:
             return
         await connection.disconnect()
 
+    async def async_disconnect_owned_session(
+        self, *, session_id: str, listener_port: int, owns_session: Callable[[], bool],
+    ) -> None:
+        """Close an exact cloud-tool baseline socket, never an IP/PN substitute."""
+        listener = self._listener
+        if listener is None or self._port != listener_port:
+            return
+        connections = (
+            listener.payload_connection_for_session(session_id),
+            listener.at_connection_for_session(session_id),
+        )
+        seen: set[int] = set()
+        for connection in connections:
+            if connection is None or id(connection) in seen:
+                continue
+            seen.add(id(connection))
+            if not owns_session():
+                return
+            await connection.disconnect()
+
     def set_collector_ip(self, collector_ip: str) -> None:
         self._collector_ip = collector_ip
         self._connection(create_placeholder=bool(self._collector_ip))
@@ -502,14 +522,11 @@ class SharedEybondTransport:
             )
             if connection is not None:
                 return connection
-            if not self._collector_ip and not self._collector_pn:
-                # A session-pinned-ONLY transport (the callback identity read):
-                # the claimed socket either resolves or there is nothing this
-                # transport may talk to. The "current connection" fallback below
-                # hands back an arbitrary live socket -- exactly the
-                # substitution a session claim exists to prevent. A claimed but
-                # still-parked socket is activated by the pop path, not here.
-                return None
+            # An exact claim also overrides configured PN/IP. During reset the
+            # new socket may still be parked while the old same-PN socket is
+            # alive. Activate the claimed socket via the pop path, never report
+            # the old one as an already-completed handoff.
+            return None
         if self._collector_pn:
             connection = self._listener.ensure_connection(
                 "",

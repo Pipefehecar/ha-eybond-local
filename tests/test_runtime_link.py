@@ -636,12 +636,21 @@ class RuntimeLinkManagerTests(unittest.TestCase):
         ), patch(
             "custom_components.eybond_local.collector.silent_session_probe.SilentSessionIdentityProbeChannel",
             return_value=channel,
-        ):
+        ), self.assertLogs(
+            "custom_components.eybond_local.runtime.link.common", level="DEBUG"
+        ) as logs:
             connected = asyncio.run(
                 manager.async_try_connect(timeout=5.0, require_heartbeat=True)
             )
 
         self.assertTrue(connected)
+        identity_logs = "\n".join(
+            line for line in logs.output if "Runtime callback identity" in line
+        )
+        self.assertIn("result=identified", identity_logs)
+        self.assertIn("source=fc1_identity_challenge", identity_logs)
+        self.assertNotIn(_OBSERVED_PN, identity_logs)
+        self.assertNotIn("unit-session", identity_logs)
         self.assertEqual(probe.await_count, 1)  # exactly one UDP trigger
         channel.async_open.assert_awaited_once()
         channel.async_close.assert_awaited_once()

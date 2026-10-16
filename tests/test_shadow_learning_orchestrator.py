@@ -38,6 +38,37 @@ from custom_components.eybond_local.support.shadow_learning.orchestrator import 
 
 
 class ShadowLearningOrchestratorTests(unittest.TestCase):
+    def test_vendor_timeout_aborts_sync_and_async_series_even_when_continue_is_enabled(self):
+        for asynchronous in (False, True):
+            with self.subTest(asynchronous=asynchronous):
+                calls = []
+                error = SmartEssActionRejectedError(err=2, desc="private vendor timeout")
+
+                def timeout(**kwargs):
+                    calls.append(kwargs)
+                    raise error
+
+                kwargs = dict(
+                    settings_dat={"field": [{"id": "f1", "name": "Mode", "item": [
+                        {"key": "0", "val": "A"}, {"key": "1", "val": "B"},
+                    ]}]},
+                    session=SessionCredentials(token="token", secret="secret"),
+                    pn="E50000200000000001", sn="SYNTHETIC1", devcode=2376, devaddr=1,
+                    dry_run=False, confirm_cloud_write=True, field_ids=[],
+                    include_numeric=False, all_choice_values=True,
+                    continue_on_error=True, fetch_action=timeout,
+                )
+                with self.assertRaises(SmartEssActionRejectedError) as raised:
+                    if asynchronous:
+                        asyncio.run(async_orchestrate_shadow_learning_settings(
+                            **kwargs, shadow_session_state="ready", is_session_ready=lambda: True,
+                        ))
+                    else:
+                        orchestrate_shadow_learning_settings(**kwargs, shadow_session_ready=True)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(classify_smartess_cloud_error(error), "timeout")
+
     def test_control_discovery_bundle_excludes_unconsumed_energy_flow(self) -> None:
         identity_dat = {
             "device": [
@@ -219,7 +250,7 @@ class ShadowLearningOrchestratorTests(unittest.TestCase):
         self.assertEqual(login.call_count, 1)
         sleep.assert_not_called()
 
-    def test_signed_action_uses_typed_definitive_rejection(self) -> None:
+    def test_signed_action_uses_typed_api_error_response(self) -> None:
         with patch(
             "custom_components.eybond_local.smartess_cloud._http_get_json",
             return_value=ApiEnvelope(err=1, desc="expected nack", dat={}, raw={}),

@@ -113,6 +113,7 @@ class CoordinatorManagementMixin:
         if not outcome.acquired:
             raise RuntimeError(COLLECTOR_ENDPOINT_OPERATION_BUSY)
         try:
+            await self._async_require_cloud_learning_unheld()
             yield outcome.token
         finally:
             COLLECTOR_ENDPOINT_OPERATION_AUTHORITY.release(entry_id, outcome.token)

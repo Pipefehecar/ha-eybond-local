@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, nullcontext
+from dataclasses import replace
 from datetime import datetime, timezone
 import ipaddress
 import logging
@@ -22,6 +23,7 @@ from ...const import (
     LOCAL_METADATA_DIR,
 )
 from ...connection.operating_profile import collector_operating_profile_from_entry
+from ...connection.cloud_learning_protection import CloudLearningProtectionRequired
 from ...metadata.collector_cloud_profile_catalog_loader import (
     resolve_collector_cloud_provider,
     resolve_collector_cloud_session_protocol,
@@ -39,6 +41,7 @@ from ...support.acquisition import (
 )
 from ...support.download import sign_proxy_capture_download_url
 from ...support.memory_guard import read_available_memory_mib, shadow_learning_memory_blocker
+from ...support.owned_worker import async_run_owned_worker
 from ...support.proxy_capture import (
     build_proxy_capture_overview,
     proxy_capture_overview_values,
@@ -108,6 +111,55 @@ logger = logging.getLogger(__name__)
 
 class CoordinatorCloudToolsMixin:
     """Own the shared proxy/shadow endpoint transaction lifecycle."""
+
+    async def async_dispatch_shadow_learning_cloud_action(
+        self, callable_, *, collector_pn: str, route_owner_id: str, **kwargs,
+    ):
+        """Keep the exact active study owned until its HTTP worker terminates."""
+
+        from .learning_dispatch import async_dispatch_owned_shadow_action
+
+        return await async_dispatch_owned_shadow_action(
+            self, callable_, collector_pn=collector_pn, route_owner_id=route_owner_id,
+            action_kwargs=kwargs,
+        )
+
+    async def _async_cloud_learning_hold_reason(self) -> str:
+        """Read the PN fence installed by the HA composition root, never cache absence."""
+
+        fence = getattr(self, "_cloud_learning_mutation_fence", None)
+        # Missing composition context cannot silently authorize a mutation.
+        # Every HA coordinator installs this before creating its runtime.
+        return await fence.hold_reason() if fence is not None else "cloud_learning_hold_context_missing"
+
+    async def _async_require_cloud_learning_unheld(self) -> None:
+        reason = await self._async_cloud_learning_hold_reason()
+        if reason:
+            raise CloudLearningProtectionRequired(reason)
+
+    def _publish_cloud_learning_hold(self, reason: str) -> dict[str, object]:
+        """Report containment obligation, not a proven offline/local handoff."""
+
+        self._publish_tooling_values(
+            cloud_learning_protection_status="held",
+            cloud_learning_protection_reason=reason,
+            shadow_learning_session_ready=False,
+            local_metadata_status="Cloud return blocked by learning protection",
+        )
+        if not getattr(self, "_cloud_learning_hold_notified", False):
+            persistent_notification.async_create(
+                self.hass,
+                _localized_runtime_text(self.hass, "cloud_learning_hold_body"),
+                title=_localized_runtime_text(self.hass, "cloud_learning_hold_title"),
+                notification_id=f"{DOMAIN}_cloud_learning_hold_{self.config_entry.entry_id}",
+            )
+            self._cloud_learning_hold_notified = True
+        return {
+            "status": "cloud_held",
+            "restore_confirmed": False,
+            "restored_endpoint": "",
+            "reason": reason,
+        }
 
     @asynccontextmanager
     async def _async_cloud_tool_preparation(self, *, allow_shutdown: bool = False):
@@ -239,6 +291,7 @@ class CoordinatorCloudToolsMixin:
     ) -> dict[str, object]:
         """Prepare and hand off with polling excluded by the caller."""
 
+        await self._async_require_cloud_learning_unheld()
         endpoint_sync_lock_code = self.collector_endpoint_sync_lock_code()
         if endpoint_sync_lock_code is not None:
             raise RuntimeError(endpoint_sync_lock_code)
@@ -426,6 +479,7 @@ class CoordinatorCloudToolsMixin:
                 await self._async_save_proxy_capture_session_state(running_state)
             except BaseException as exc:
                 # MANDATORY cancellation-safe cleanup (catches CancelledError too).
+                self._protected_learning_run = None
                 # ONE shielded finalization boundary runs to completion even under
                 # REPEATED cancellation: restore the endpoint, stop the route by
                 # exact owner id, then clear+release (confirmed) OR persist a
@@ -741,6 +795,8 @@ class CoordinatorCloudToolsMixin:
         output_path: Path | None = None,
         raw_capture: dict[str, Any] | None = None,
         allow_ack_writes: bool = False,
+        confirm_cloud_outage: bool = False,
+        cloud_source: str = "",
     ) -> dict[str, object]:
         """Start one fail-closed shadow-learning runtime session."""
 
@@ -749,7 +805,34 @@ class CoordinatorCloudToolsMixin:
                 output_path=output_path,
                 raw_capture=raw_capture,
                 allow_ack_writes=allow_ack_writes,
+                confirm_cloud_outage=confirm_cloud_outage,
+                cloud_source=cloud_source,
             )
+
+    async def async_shadow_learning_retry_available(self) -> bool:
+        from .learning_retry import async_retry_context
+        try:
+            return await async_retry_context(self) is not None
+        except (CloudLearningProtectionRequired, OSError):
+            return False
+
+    async def async_retry_shadow_learning(self, **kwargs) -> dict[str, object]:
+        from .learning_retry import async_start_protected_retry
+        try:
+            return await async_start_protected_retry(self, **kwargs)
+        except RuntimeError as exc:
+            reason = str(exc)
+            if reason in {
+                "cloud_learning_retry_local_session_unavailable", "cloud_learning_retry_local_identity_unverified",
+                "cloud_learning_retry_local_endpoint_unverified", "cloud_learning_retry_local_payload_unverified",
+                "cloud_learning_retry_local_session_changed", "cloud_learning_retry_route_context_changed",
+                "cloud_learning_retry_route_mismatch", "cloud_learning_retry_permit_invalid",
+                "cloud_learning_retry_record_mismatch", "cloud_learning_retry_archive_conflict",
+                "cloud_learning_protection_held", "collector_endpoint_operation_busy",
+                "shadow_learning_collector_control_disabled", "cloud_learning_hold_consent_required",
+            }:
+                logger.warning("Protected learning retry refused: %s", reason)
+            raise
 
     @property
     def shadow_learning_restore_pending(self) -> bool:
@@ -766,6 +849,11 @@ class CoordinatorCloudToolsMixin:
     async def async_shadow_learning_start_blocker(self) -> str:
         """Read the persisted recovery obligation before any new learning I/O."""
 
+        from .learning_recovery import async_preserve_interrupted_learning_hold
+
+        await async_preserve_interrupted_learning_hold(self)
+        if await self._async_cloud_learning_hold_reason():
+            return "cloud_learning_protection_held"
         state = await self._async_active_shadow_learning_state(require_process=False)
         if (
             str(getattr(state, "status", "") or "") in {"restoring", "restore_failed"}
@@ -780,9 +868,12 @@ class CoordinatorCloudToolsMixin:
         output_path: Path | None,
         raw_capture: dict[str, Any] | None,
         allow_ack_writes: bool,
+        confirm_cloud_outage: bool,
+        cloud_source: str,
     ) -> dict[str, object]:
         """Include raw evidence acquisition in the exclusive preparation."""
 
+        await self._async_require_cloud_learning_unheld()
         active_readiness = self.support_acquisition_readiness.active_control_learning
         if not active_readiness.can_start:
             if active_readiness.blocker == SUPPORT_BLOCKER_OPERATING_PROFILE:
@@ -800,6 +891,8 @@ class CoordinatorCloudToolsMixin:
         restore_blocker = await self.async_shadow_learning_start_blocker()
         if restore_blocker:
             raise RuntimeError(restore_blocker)
+        if confirm_cloud_outage is not True or cloud_source not in {"smartess", "dessmonitor", "valuecloud"}:
+            raise RuntimeError("cloud_learning_hold_consent_required")
 
         add_executor_job = getattr(
             getattr(self, "hass", None),
@@ -857,6 +950,13 @@ class CoordinatorCloudToolsMixin:
         _op_hold = False
         try:
             endpoint_context = await self._async_prepare_cloud_tool_endpoint_context()
+            # A held run must survive stopping the temporary route/restarting HA.
+            # Use the normal listener, preserving NAT advertised vs local ports.
+            endpoint_context = replace(
+                endpoint_context,
+                target_endpoint=(f"{self._effective_callback_server_host},"
+                                 f"{self._connection_spec.effective_advertised_tcp_port},TCP"),
+            )
             seed, blockers = build_shadow_learning_seed(
                 session_id=session_id,
                 entry_id=self.config_entry.entry_id,
@@ -922,6 +1022,8 @@ class CoordinatorCloudToolsMixin:
                 expires_at=expires_at,
                 updated_at=started_at,
                 status="preflight",
+                protection_version=1,
+                cloud_source=cloud_source,
             )
             endpoint_mutation_started = False
             try:
@@ -942,6 +1044,9 @@ class CoordinatorCloudToolsMixin:
                     local_metadata_status="Starting shadow-learning route",
                 )
                 starting_state = build_shadow_learning_session_state(
+                    cloud_commands_possible=state.cloud_commands_possible,
+                    protection_version=state.protection_version,
+                    cloud_source=state.cloud_source,
                     entry_id=state.entry_id,
                     route_owner_id=state.route_owner_id,
                     collector_pn=state.collector_pn,
@@ -959,6 +1064,10 @@ class CoordinatorCloudToolsMixin:
                     status="starting",
                 )
                 await self._async_save_shadow_learning_session_state(starting_state)
+                from .learning_isolation import async_prepare_local_learning_route
+
+                endpoint_mutation_started = True
+                self._protected_learning_run = await async_prepare_local_learning_route(self, starting_state)
                 await self._runtime.async_start_shadow_learning_route(
                     owner_id=state.route_owner_id,
                     entry_id=state.entry_id,
@@ -967,7 +1076,7 @@ class CoordinatorCloudToolsMixin:
                     expected_session_protocol=resolve_collector_cloud_session_protocol(
                         self.collector_cloud_family
                     ),
-                    listen_port=callback_port,
+                    listen_port=self._connection_spec.tcp_port,
                     upstream_host=upstream_host,
                     upstream_port=upstream_port,
                     output_path=trace_path,
@@ -975,15 +1084,6 @@ class CoordinatorCloudToolsMixin:
                 )
 
                 min_ready_sequence = 0
-                if restore_required:
-                    # From here the write may have changed the collector even if
-                    # cancellation prevents a result. The shielded finalizer
-                    # therefore owns the mandatory restore.
-                    endpoint_mutation_started = True
-                    await self._runtime.async_set_collector_server_endpoint(
-                        callback_endpoint,
-                        apply_changes=True,
-                    )
                 await self._async_disconnect_collector_for_cloud_tool_route(
                     reason="shadow_learning_start"
                 )
@@ -994,6 +1094,9 @@ class CoordinatorCloudToolsMixin:
                     min_collector_connection_sequence=min_ready_sequence,
                 )
                 ready_state = build_shadow_learning_session_state(
+                    cloud_commands_possible=state.cloud_commands_possible,
+                    protection_version=state.protection_version,
+                    cloud_source=state.cloud_source,
                     entry_id=state.entry_id,
                     route_owner_id=state.route_owner_id,
                     collector_pn=state.collector_pn,
@@ -1164,10 +1267,16 @@ class CoordinatorCloudToolsMixin:
         raise_when_not_running: bool,
         clear_failed_restore: bool,
     ) -> dict[str, object]:
-        """Stop one in-process shadow-learning session and restore collector endpoint."""
+        """Stop interception; restore only pre-command runs without a hold."""
 
+        from .learning_recovery import async_preserve_interrupted_learning_hold
+
+        await async_preserve_interrupted_learning_hold(self)
+        hold_reason = await self._async_cloud_learning_hold_reason()
         state = await self._async_active_shadow_learning_state(require_process=False)
         if state is None and not self._shadow_learning_process_running():
+            if hold_reason:
+                return self._publish_cloud_learning_hold(hold_reason)
             if raise_when_not_running:
                 raise RuntimeError("shadow_learning_not_running")
             return {"status": "not_running"}
@@ -1195,6 +1304,9 @@ class CoordinatorCloudToolsMixin:
             raise RuntimeError(_OP_BUSY)
         if state is not None:
             stopping_state = build_shadow_learning_session_state(
+                cloud_commands_possible=state.cloud_commands_possible,
+                protection_version=state.protection_version,
+                cloud_source=state.cloud_source,
                 entry_id=state.entry_id,
                 route_owner_id=route_owner_id,
                 collector_pn=state.collector_pn,
@@ -1219,6 +1331,27 @@ class CoordinatorCloudToolsMixin:
             )
         else:
             await self._runtime.async_stop_shadow_learning_route()
+        self._protected_learning_run = None
+
+        # The cloud route is now closed; do not keep serving snapshot telemetry.
+        # A hold survives normal completion, retries, force-clear and restart.
+        # Retain the exact endpoint-operation ownership and restoration evidence.
+        # Protected runs already proved the normal listener and persistent local
+        # endpoint before sending commands. Releasing the temporary reservation
+        # returns future connections to normal runtime; no endpoint write needed.
+        async def retain_hold(reason: str) -> dict[str, object]:
+            if state is not None:
+                await self._async_save_shadow_learning_session_state(replace(
+                    stopping_state,
+                    status="restore_failed",
+                    last_restore_error=reason,
+                    updated_at=shadow_learning_session_timestamp(),
+                ))
+            return self._publish_cloud_learning_hold(reason)
+
+        hold_reason = hold_reason or await self._async_cloud_learning_hold_reason()
+        if hold_reason:
+            return await retain_hold(hold_reason)
 
         restored_endpoint = ""
         restore_confirmed = True
@@ -1256,12 +1389,24 @@ class CoordinatorCloudToolsMixin:
                 )
                 self._notify_proxy_capture_restore_unconfirmed()
 
+        # A lower-level guard may have discovered a hold during restoration.
+        # Even force-clear must preserve both its evidence and endpoint owner.
+        late_hold_reason = await self._async_cloud_learning_hold_reason()
+        if late_hold_reason:
+            return await retain_hold(late_hold_reason)
+
         if restore_confirmed or clear_failed_restore or state is None or not state.restore_required:
             # Mode finalized: clear the session AND release the exact token as ONE
             # cancellation-safe critical step (never "record cleared + authority
             # still held").
             async def _clear_and_release() -> None:
-                await self._async_clear_shadow_learning_session_state()
+                await self._async_clear_shadow_learning_session_state(
+                    outcome=(
+                        "endpoint_verified" if restore_confirmed and state is not None and state.restore_required
+                        else "explicit_discard" if clear_failed_restore
+                        else "restore_not_required"
+                    ),
+                )
                 if _op_token is not None:
                     _OP_AUTHORITY.release(self.config_entry.entry_id, _op_token)
 
@@ -1274,6 +1419,9 @@ class CoordinatorCloudToolsMixin:
                 raise _pending_cancel
         else:
             failed_state = build_shadow_learning_session_state(
+                cloud_commands_possible=state.cloud_commands_possible,
+                protection_version=state.protection_version,
+                cloud_source=state.cloud_source,
                 entry_id=state.entry_id,
                 route_owner_id=route_owner_id,
                 collector_pn=state.collector_pn,
@@ -1590,6 +1738,7 @@ class CoordinatorCloudToolsMixin:
     async def _async_restore_proxy_capture_endpoint(self, endpoint: str) -> str:
         """Reconcile a saved endpoint through fresh runtime-owned management."""
 
+        await self._async_require_cloud_learning_unheld()
         return await restore_collector_endpoint(
             self._runtime, endpoint,
             timeout=DEFAULT_ONBOARDING_TIMEOUT_POLICY.callback_recovery_session_wait,
@@ -1930,6 +2079,7 @@ class CoordinatorCloudToolsMixin:
         trace_path: Path,
         owner_id: str,
     ) -> bool:
+        await self._async_require_cloud_learning_unheld()
         trigger_path = build_proxy_capture_restore_trigger_path(trace_path)
         await self.hass.async_add_executor_job(
             lambda: trigger_path.write_text(
@@ -2123,11 +2273,16 @@ class CoordinatorCloudToolsMixin:
                 restored = False
                 restore_error = "shadow_learning_original_endpoint_unavailable"
         if restored:
-            await self._async_clear_shadow_learning_session_state()
+            await self._async_clear_shadow_learning_session_state(
+                outcome="start_rollback_verified" if endpoint_mutation_started else "start_not_mutated",
+            )
             _OP_AUTHORITY.release(entry_id, token)
             return True
         attempt_at = shadow_learning_session_timestamp()
         restore_failed_state = build_shadow_learning_session_state(
+            cloud_commands_possible=state.cloud_commands_possible,
+            protection_version=state.protection_version,
+            cloud_source=state.cloud_source,
             entry_id=state.entry_id,
             route_owner_id=state.route_owner_id,
             collector_pn=state.collector_pn,
@@ -2270,6 +2425,11 @@ class CoordinatorCloudToolsMixin:
             "upstream_connected": bool(status.get("upstream_connected")),
             "ready": bool(status.get("ready")),
             "upstream_error": str(status.get("upstream_error") or ""),
+            "collector_identity_verified": status.get("collector_identity_verified") is True,
+            "collector_identity_pn": (
+                status.get("collector_identity_pn", "")
+                if type(status.get("collector_identity_pn", "")) is str else ""
+            ),
         }
 
     @property
@@ -2321,6 +2481,9 @@ class CoordinatorCloudToolsMixin:
                 if state is not None:
                     await self._async_save_shadow_learning_session_state(
                         build_shadow_learning_session_state(
+                            cloud_commands_possible=state.cloud_commands_possible,
+                            protection_version=state.protection_version,
+                            cloud_source=state.cloud_source,
                             entry_id=state.entry_id,
                             route_owner_id=state.route_owner_id,
                             collector_pn=state.collector_pn,
@@ -2368,6 +2531,17 @@ class CoordinatorCloudToolsMixin:
                 owner_id=state.route_owner_id
             )
             route_stopped = True
+
+        hold_reason = await self._async_cloud_learning_hold_reason()
+        if hold_reason:
+            await _stop_route_once()
+            self._publish_cloud_learning_hold(hold_reason)
+            return {
+                "restore_confirmed": False,
+                "restore_mode": "cloud_held",
+                "restore_skipped_reason": hold_reason,
+                "restore_error": hold_reason,
+            }
 
         current_endpoint = await self._async_read_live_collector_server_endpoint()
         restore_skipped_reason = proxy_capture_restore_guard_reason(
@@ -2624,21 +2798,33 @@ class CoordinatorCloudToolsMixin:
     async def _async_save_shadow_learning_session_state(self, state) -> None:
         """Persist one shadow-learning session state without blocking the event loop."""
 
-        await self.hass.async_add_executor_job(
-            lambda: save_shadow_learning_session_state(
+        try:
+            await async_run_owned_worker(
+                save_shadow_learning_session_state,
                 config_dir=Path(self.hass.config.config_dir),
                 state=state,
             )
-        )
+        except BaseException:
+            # The worker may have completed its rename before cancellation or
+            # a directory-sync error. Cleanup must read disk, not a stale cache.
+            self._shadow_learning_session_state_loaded = False
+            raise
         self._cached_shadow_learning_session_state = state
         self._shadow_learning_session_state_loaded = True
 
-    async def _async_clear_shadow_learning_session_state(self) -> None:
+    async def _async_clear_shadow_learning_session_state(self, *, outcome: str) -> None:
         """Delete persisted shadow-learning session state without blocking the event loop."""
 
-        await self.hass.async_add_executor_job(
-            lambda: clear_shadow_learning_session_state(Path(self.hass.config.config_dir))
-        )
+        state = await self._async_active_shadow_learning_state(require_process=False)
+        if state is not None:
+            try:
+                await async_run_owned_worker(
+                    clear_shadow_learning_session_state,
+                    config_dir=Path(self.hass.config.config_dir), expected_state=state, outcome=outcome,
+                )
+            except BaseException:
+                self._shadow_learning_session_state_loaded = False
+                raise
         self._cached_shadow_learning_session_state = None
         self._shadow_learning_session_state_loaded = True
 

@@ -70,7 +70,7 @@ class DessMonitorCloudError(RuntimeError):
 
 
 class DessMonitorActionRejectedError(DessMonitorCloudError):
-    """A completed signed action returned a definitive provider error."""
+    """An API error response, not proof that command delivery is terminal."""
 
     def __init__(self, *, err: int, action: str, desc: str) -> None:
         self.err = err

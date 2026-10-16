@@ -96,6 +96,22 @@ def parse_query_collector_response(payload: bytes) -> CollectorQueryResponse:
     )
 
 
+def decode_reboot_required(response: CollectorQueryResponse) -> str:
+    """Return only a confirmed ASCII flag, otherwise leave it unknown.
+
+    FC2 parameter 30 is not consistently a text value across firmware. A live
+    collector returned code=0 with binary trailing bytes; the vendor app also
+    has a path that checks the status byte instead of the tail. Neither proves
+    a universal flag encoding. Keep explicit 0/1 payloads compatible, but never
+    turn arbitrary bytes (or a successful query status alone) into a flag.
+    Inspect the original bytes: the generic diagnostic text decoder is lossy.
+    """
+    if response.code != 0 or response.parameter != QUERY_REBOOT_REQUIRED:
+        return ""
+    value = response.data.strip(b"\x00 \t\r\n")
+    return value.decode("ascii") if value in (b"0", b"1") else ""
+
+
 def build_set_collector_payload(parameter: int, value: str) -> bytes:
     """Build one FC=3 collector set payload."""
 

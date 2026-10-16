@@ -194,8 +194,28 @@ class DessMonitorOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["captured_not_applied_count"], 1)
         attempt = result["results"][0]
-        self.assertEqual(attempt["delivery_outcome"], "definitive_rejection")
+        self.assertEqual(attempt["delivery_outcome"], "cloud_error_response")
         self.assertEqual(attempt["cloud_nack_response"]["err"], 9)
+
+    async def test_vendor_timeout_stops_before_second_value_even_with_observation(self) -> None:
+        for observed in (False, True):
+            with self.subTest(observed=observed):
+                calls, observations = [], []
+                error = DessMonitorActionRejectedError(err=2, action="ctrlDevice", desc="timeout")
+
+                def action(**kwargs):
+                    calls.append(kwargs)
+                    if observed:
+                        observations.append(_observation())
+                    raise error
+
+                with self.assertRaises(DessMonitorActionRejectedError) as raised:
+                    await self._run(action=action, observations=observations, all_choice_values=True)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(len(calls), 1)
+                from custom_components.eybond_local.support.cloud_api_adapters import DessMonitorCloudApiAdapter
+
+                self.assertEqual(DessMonitorCloudApiAdapter().classify_error(error), "timeout")
 
     async def test_success_without_observation_is_leaked_and_stops(self) -> None:
         calls = []

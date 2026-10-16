@@ -222,6 +222,15 @@ class CollectorEndpointOperationAuthority:
         del self._held[key]
         return True
 
+    def handoff_shadow_learning(self, token: object, owner_ref: str) -> CollectorEndpointOperationToken:
+        """Replace an exact shadow owner atomically, without an unowned interval."""
+        if (not self.owns(token) or token.operation_kind != OPERATION_SHADOW_LEARNING
+                or _exact_normalized_str(owner_ref) is None or owner_ref == token.owner_ref):
+            raise RuntimeError(COLLECTOR_ENDPOINT_OPERATION_BUSY)
+        replacement = CollectorEndpointOperationToken(token.entry_id, OPERATION_SHADOW_LEARNING, owner_ref)
+        self._held[token.entry_id] = replacement
+        return replacement
+
     def active_operation(self, entry_id: object) -> str:
         """The active operation kind for one entry, or ``""`` when free (read-only)."""
 
@@ -230,6 +239,14 @@ class CollectorEndpointOperationAuthority:
             return ""
         held = self._held.get(key)
         return held.operation_kind if held is not None else ""
+
+    def owns(self, token: object) -> bool:
+        """Check an exact live owner without adopting/recreating a lost lease."""
+
+        return (
+            type(token) is CollectorEndpointOperationToken
+            and self._held.get(token.entry_id) == token
+        )
 
     def is_held(self, entry_id: object) -> bool:
         key = _exact_normalized_str(entry_id)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
+
 from .common import (
     Any,
     Callable,
@@ -46,6 +48,7 @@ class EybondHub(
         driver_hint: str = DRIVER_HINT_AUTO,
         driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
         connection_mode: str = "",
+        collector_mutation_guard: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._driver_hint = driver_hint
         self._driver_detection_strategy = (
@@ -55,6 +58,10 @@ class EybondHub(
         )
         self._connection = connection
         self._connection_mode = connection_mode
+        # Mandatory in HA's composition root; standalone protocol harnesses do
+        # not have an HA config directory. Reads and inverter writes are not
+        # endpoint mutations and remain available while cloud return is fenced.
+        self._collector_mutation_guard = collector_mutation_guard
         self._link_manager = EybondRuntimeLinkManager(
             server_ip=connection.server_ip,
             advertised_server_ip=connection.advertised_server_ip,

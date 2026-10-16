@@ -292,14 +292,21 @@ What to expect:
    verification.
 3. When more than one compatible API is available, choose the exact cloud
    source for this run.
-4. For active verification, confirm the temporary collector endpoint change,
-   bounded cloud test commands, and their local interception by Home Assistant.
+4. For active verification, confirm the local endpoint change, bounded cloud
+   test commands, their interception, and the continuing cloud outage.
 5. Sign in to the supported cloud account for this one session, if requested.
 6. Review the result. Read-only evidence does not add entities automatically;
    only locally proven active results can be applied.
 
 The cloud password is not saved. Learned items apply only to this Home Assistant
 device until they are reviewed and added to the built-in catalog.
+
+In the current 0.3 test build, active learning keeps the collector local after
+the first test command, **including after success or a Home Assistant restart**.
+Local telemetry and supported controls remain available, but cloud telemetry
+and app control stay disconnected pending reviewed recovery. Do not start
+active learning if you need uninterrupted cloud access. Read-only analysis does
+not change the connection. This protection is not Cloud Bridge.
 
 If anything looks unsafe or unexpected, stop and create a Support Archive instead.
 

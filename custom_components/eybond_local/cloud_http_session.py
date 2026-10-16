@@ -41,6 +41,7 @@ class CloudHttpSession:
         self._path = parsed.path or "/"
         self._connection = None
         self._closed = False
+        self._request_attempts = 0
         self._lock = Lock()
 
     @staticmethod
@@ -85,6 +86,8 @@ class CloudHttpSession:
                 connection.sock.settimeout(timeout)
             target = self._path + ("?" + parsed.query if parsed.query else "")
             phase = "request"
+            # Count BEFORE request(): even a partial send is indeterminate.
+            self._request_attempts += 1
             connection.request("GET", target, headers=headers)
             phase = "response_headers"
             response = connection.getresponse()
@@ -127,5 +130,24 @@ class CloudHttpSession:
             raise RuntimeError("cloud_http_busy")
         try:
             self._close_locked()
+        finally:
+            self._lock.release()
+
+    def close_and_confirm_no_request(self) -> bool:
+        """Owner-only proof after joining the worker; also forbid future use.
+
+        This covers the entire resource lifetime, not just the last error. A
+        successful earlier command followed by a connect failure is NOT no-send.
+        """
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("cloud_http_busy")
+        try:
+            if self._request_attempts:
+                # A provider NACK can be the expected intercepted-write result.
+                # It must not close a healthy keep-alive connection needed by
+                # the next learning action. Network failures already close it.
+                return False
+            self._close_locked()
+            return True
         finally:
             self._lock.release()

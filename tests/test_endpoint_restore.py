@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from custom_components.eybond_local.collector.management import CollectorManagementCommandError
 from custom_components.eybond_local.runtime.endpoint_restore import restore_collector_endpoint
@@ -64,6 +64,57 @@ class EndpointRestoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.restore(runtime), ORIGINAL)
         runtime.async_disconnect_collector_connections.assert_awaited_once()
         runtime.async_set_collector_server_endpoint.assert_not_awaited()
+
+    async def test_reboot_reconnect_can_arrive_after_several_short_connect_failures(self):
+        from custom_components.eybond_local.collector.management import CollectorManagementTransportError
+
+        runtime = self.runtime(
+            state(LOCAL), ConnectionError("collector_not_connected"),
+            TimeoutError(), CollectorManagementTransportError("collector_management_session_changed"),
+            state(),
+        )
+        with patch("custom_components.eybond_local.runtime.endpoint_restore._RESTORE_RETRY_DELAY", 0):
+            self.assertEqual(await self.restore(runtime), ORIGINAL)
+        runtime.async_set_collector_server_endpoint.assert_awaited_once()
+        runtime.async_apply_collector_changes.assert_not_awaited()
+        runtime.async_disconnect_collector_connections.assert_awaited_once()
+        self.assertEqual(runtime.async_get_collector_server_endpoint_state.await_count, 5)
+
+    async def test_readback_retry_has_one_total_deadline(self):
+        runtime = self.runtime()
+        calls = 0
+
+        async def read(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return state(LOCAL)
+            raise ConnectionError("collector_not_connected")
+
+        runtime.async_get_collector_server_endpoint_state.side_effect = read
+        with patch("custom_components.eybond_local.runtime.endpoint_restore._RESTORE_RECONNECT_SECONDS", 0.02):
+            with self.assertRaisesRegex(TimeoutError, "restore_reconnect_timeout"):
+                await self.restore(runtime)
+        runtime.async_set_collector_server_endpoint.assert_awaited_once()
+        runtime.async_disconnect_collector_connections.assert_awaited_once()
+
+    async def test_cancel_during_reconnect_does_not_repeat_endpoint_write(self):
+        runtime = self.runtime(state(LOCAL), ConnectionError("collector_not_connected"))
+        waiting = asyncio.Event()
+
+        async def read(**kwargs):
+            if runtime.async_get_collector_server_endpoint_state.await_count == 1:
+                return state(LOCAL)
+            waiting.set()
+            raise ConnectionError("collector_not_connected")
+
+        runtime.async_get_collector_server_endpoint_state.side_effect = read
+        task = asyncio.create_task(self.restore(runtime))
+        await waiting.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        runtime.async_set_collector_server_endpoint.assert_awaited_once()
 
     async def test_repeated_read_failure_never_writes(self):
         runtime = self.runtime(TimeoutError(), TimeoutError())
