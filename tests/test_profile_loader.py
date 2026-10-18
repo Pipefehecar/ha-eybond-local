@@ -17,6 +17,27 @@ from custom_components.eybond_local.metadata import profile_loader
 
 
 class ProfileLoaderTests(unittest.TestCase):
+    def test_pi30_flag_wire_case_is_profile_scoped_without_changing_support(self) -> None:
+        base = profile_loader.load_driver_profile("pi30_ascii.json")
+        for name in ("pi30_max", "vmii_nxpw5kw"):
+            profile = profile_loader.load_driver_profile(f"pi30_ascii/models/{name}.json")
+            with self.subTest(profile=name):
+                maps = [cap for cap in profile.capabilities if cap.command_map]
+                self.assertEqual(len(maps), 9)
+                for cap in maps:
+                    inherited = base.get_capability(cap.key)
+                    self.assertEqual(cap.command_map[0][:2], "PD")
+                    self.assertEqual(cap.command_map[1][:2], "PE")
+                    self.assertTrue(cap.command_map[0][-1].islower())
+                    self.assertEqual(cap.command_map[0][-1], cap.command_map[1][-1])
+                    self.assertEqual(cap.tested, inherited.tested)
+                    self.assertEqual(cap.resolved_support_tier, inherited.resolved_support_tier)
+                    self.assertEqual(cap.enabled_default, inherited.enabled_default)
+        for name in ("default", "pi30_pip_gk"):
+            profile = profile_loader.load_driver_profile(f"pi30_ascii/models/{name}.json")
+            with self.subTest(profile=name):
+                self.assertIsNone(profile.get_capability("buzzer_enabled").command_map)
+
     def tearDown(self) -> None:
         profile_loader.set_external_profile_roots(())
         profile_loader.load_driver_profile.cache_clear()

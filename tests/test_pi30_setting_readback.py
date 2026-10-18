@@ -1,8 +1,14 @@
 """PI30 ACKs must be followed by fresh configuration evidence, not cached labels."""
 import asyncio
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from custom_components.eybond_local.drivers import pi30
 from custom_components.eybond_local.drivers.pi30_controls import async_acquire_charge_current_controls
@@ -94,6 +100,37 @@ class Pi30SettingReadbackTests(unittest.IsolatedAsyncioTestCase):
                 None, self.inverter, "max_ac_charging_current", "20 A", runtime_state=self.hub._runtime_read_state)
         self.assertNotIn(pi30._SETTING_READBACK_KEY, self.hub._runtime_read_state)
         self.assertEqual(self.inverter.details["max_ac_charging_current"], 10)
+
+    async def test_max_lowercase_flag_is_confirmed_only_by_fresh_qflag(self):
+        self.inverter.capabilities = load_driver_profile("pi30_ascii/models/pi30_max.json").capabilities
+        for readback, confirmed in (("EaDx", True), ("EaxD", False)):
+            with self.subTest(readback=readback):
+                self.hub._runtime_read_state.clear()
+                self.hub.values["lcd_backlight_enabled"] = True
+                session = _session({"PDx": "ACK", "QFLAG": readback})
+                with patch.object(pi30.Pi30Driver, "_session", return_value=session):
+                    if confirmed:
+                        self.assertIs(await self.hub.async_write_capability("lcd_backlight_enabled", False), False)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "write_not_confirmed"):
+                            await self.hub.async_write_capability("lcd_backlight_enabled", False)
+                commands = [c.args[0] for c in session.request.await_args_list]
+                self.assertEqual(commands, ["PDx", "QFLAG"] if confirmed else ["PDx", "QFLAG", "QFLAG"])
+                self.assertIs(self.hub.values["lcd_backlight_enabled"], not confirmed)
+
+    async def test_max_nak_never_retries_uppercase_or_updates_cached_flag(self):
+        self.inverter.capabilities = load_driver_profile("pi30_ascii/models/pi30_max.json").capabilities
+        self.inverter.details["buzzer_enabled"] = True
+        session = _session({"PDa": Pi30Error("nak")})
+        with patch.object(pi30.Pi30Driver, "_session", return_value=session):
+            with self.assertRaises(Pi30Error):
+                await self.hub._driver.async_write_capability(
+                    None, self.inverter, "buzzer_enabled", False,
+                    runtime_state=self.hub._runtime_read_state,
+                )
+        self.assertEqual([c.args[0] for c in session.request.await_args_list], ["PDa"])
+        self.assertNotIn(pi30._SETTING_READBACK_KEY, self.hub._runtime_read_state)
+        self.assertIs(self.inverter.details["buzzer_enabled"], True)
 
     async def test_reset_rebind_and_cancellation_cannot_publish_pending_read(self):
         for mode in ("reset", "rebind", "cancel"):

@@ -154,6 +154,13 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- PI30 MAX flag switches use case-sensitive lowercase flag letters (`PEa`/`PDa`,
+  etc.) from their profile instead of the legacy PI30 uppercase commands that
+  some MAX firmware rejects with NAK (#64). Exact command maps preserve wire
+  case through profile loading; legacy PI30/PIP-GK commands remain unchanged.
+  Writes still require QFLAG readback and never retry a rejected command with
+  another spelling. This does not qualify additional flags as hardware-tested.
+
 - Aninerel ANL-4200T-24L-W-PRO source-priority presets now use this model's
   five-value enum: the PV/grid-backup preset selects SUB (3), not SOL (1).
   Model-specific button names and descriptions distinguish source priorities

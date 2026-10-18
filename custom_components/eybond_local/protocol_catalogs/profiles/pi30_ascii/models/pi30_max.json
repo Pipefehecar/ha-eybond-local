@@ -6,6 +6,51 @@
   "protocol_family": "pi30",
   "capabilities": [
     {
+      "key": "buzzer_enabled",
+      "command_map": {"0": "PDa", "1": "PEa"},
+      "note": "PI30 MAX PEa/PDa command (case-sensitive flag letter)."
+    },
+    {
+      "key": "overload_bypass_enabled",
+      "command_map": {"0": "PDb", "1": "PEb"},
+      "note": "PI30 MAX PEb/PDb command (case-sensitive flag letter)."
+    },
+    {
+      "key": "power_saving_enabled",
+      "command_map": {"0": "PDj", "1": "PEj"},
+      "note": "PI30 MAX-style PEj/PDj command; power-saving flag support is firmware-dependent."
+    },
+    {
+      "key": "lcd_reset_to_default_enabled",
+      "command_map": {"0": "PDk", "1": "PEk"},
+      "note": "PI30 MAX PEk/PDk command (case-sensitive flag letter)."
+    },
+    {
+      "key": "overload_restart_enabled",
+      "command_map": {"0": "PDu", "1": "PEu"},
+      "note": "PI30 MAX PEu/PDu command (case-sensitive flag letter)."
+    },
+    {
+      "key": "over_temperature_restart_enabled",
+      "command_map": {"0": "PDv", "1": "PEv"},
+      "note": "PI30 MAX PEv/PDv command (case-sensitive flag letter)."
+    },
+    {
+      "key": "lcd_backlight_enabled",
+      "command_map": {"0": "PDx", "1": "PEx"},
+      "note": "PI30 MAX PEx/PDx command (case-sensitive flag letter)."
+    },
+    {
+      "key": "primary_source_interrupt_alarm_enabled",
+      "command_map": {"0": "PDy", "1": "PEy"},
+      "note": "PI30 MAX PEy/PDy command (case-sensitive flag letter)."
+    },
+    {
+      "key": "record_fault_code_enabled",
+      "command_map": {"0": "PDz", "1": "PEz"},
+      "note": "PI30 MAX PEz/PDz command (case-sensitive flag letter)."
+    },
+    {
       "key": "max_charging_current",
       "register": 0,
       "value_kind": "enum",

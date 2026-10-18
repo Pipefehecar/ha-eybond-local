@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 from pathlib import Path
 import sys
 import unittest
@@ -55,6 +56,19 @@ class Pi30PayloadTests(unittest.TestCase):
 
     def test_build_request_appends_crc_and_cr(self) -> None:
         self.assertEqual(build_request("QPI"), b"QPI\xbe\xac\r")
+
+    def test_flag_wire_case_is_preserved_and_included_in_crc(self) -> None:
+        for command in ("PEa", "PDa", "PEA", "PDA"):
+            with self.subTest(command=command):
+                frame = build_request(command)
+                self.assertEqual(frame[:-3], command.encode("ascii"))
+                self.assertEqual(frame[-1:], b"\r")
+                # Independent standard-library CRC implementation.
+                crc = binascii.crc_hqx(command.encode("ascii"), 0)
+                expected = bytes(b + 1 if b in (0x28, 0x0D, 0x0A) else b
+                                 for b in crc.to_bytes(2, "big"))
+                self.assertEqual(frame[-3:-1], expected)
+        self.assertNotEqual(build_request("PEa")[-3:-1], build_request("PEA")[-3:-1])
 
     def test_parse_response_decodes_ascii_payload(self) -> None:
         self.assertEqual(parse_response(_frame("PI30")), "PI30")

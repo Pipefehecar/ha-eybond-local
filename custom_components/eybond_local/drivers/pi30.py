@@ -1505,6 +1505,11 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
 
 
 def _build_write_command(capability: WriteCapability, raw_value: int) -> str:
+    if capability.command_map is not None:
+        try:
+            return capability.command_map[raw_value]
+        except KeyError as exc:
+            raise ValueError(f"unsupported_write_value:{capability.key}:{raw_value}") from exc
     if capability.command:
         encoded = str(raw_value)
         if capability.command_width is not None:

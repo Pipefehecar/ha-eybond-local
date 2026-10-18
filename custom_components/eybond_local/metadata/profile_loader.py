@@ -414,7 +414,9 @@ def _parse_command_map(raw: Any) -> dict[int, str] | None:
         return None
     parsed: dict[int, str] = {}
     for key, value in raw.items():
-        command = str(value or "").strip().upper()
+        # These are exact wire commands, not case-insensitive identifiers.
+        # PI30 MAX, for example, distinguishes PEa from PEA.
+        command = str(value or "").strip()
         if not command:
             continue
         parsed[int(key)] = command

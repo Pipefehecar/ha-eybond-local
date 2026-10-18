@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
@@ -11,7 +12,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.drivers.pi30 import Pi30Driver
+from custom_components.eybond_local.drivers.pi30 import Pi30Driver, _build_write_command
+from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.drivers.read_result import (
     DriverReadMode,
     DriverReadResult,
@@ -769,6 +771,56 @@ class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(disabled)
         self.assertIn("PEA", transport.commands)
         self.assertIn("PDA", transport.commands)
+
+    async def test_pi30_max_flag_writes_preserve_case_for_all_existing_switches(self) -> None:
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0)
+        flags = {
+            "buzzer_enabled": "a",
+            "overload_bypass_enabled": "b",
+            "power_saving_enabled": "j",
+            "lcd_reset_to_default_enabled": "k",
+            "overload_restart_enabled": "u",
+            "over_temperature_restart_enabled": "v",
+            "lcd_backlight_enabled": "x",
+            "primary_source_interrupt_alarm_enabled": "y",
+            "record_fault_code_enabled": "z",
+        }
+        replies = {
+            "QPI": "PI30",
+            "QID": "99000000000064",
+            "QPIRI": (
+                "220.0 19.0 220.0 50.0 19.0 4200 4200 24.0 27.0 21.0 "
+                "28.2 27.0 2 30 80 0 2 2 1 10 0 0 27.0 0 1 23.0 10 22.0"
+            ),
+            "QFLAG": "EakuxyzlDbjvgd",
+        }
+        for flag in flags.values():
+            for prefix in ("PE", "PD"):
+                replies[prefix + flag] = "ACK"
+                replies[prefix + flag.upper()] = "NAK"
+        transport = _FakeTransport({(0x0994, 1, k): v for k, v in replies.items()})
+        inverter = await driver.async_probe(transport, target)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.variant_key, "pi30_max")
+        self.assertEqual(inverter.profile_name, "pi30_ascii/models/pi30_max.json")
+        transport.commands.clear()
+        expected = []
+        for key, flag in flags.items():
+            for enabled, prefix in ((True, "PE"), (False, "PD")):
+                with self.subTest(key=key, enabled=enabled):
+                    self.assertIs(await driver.async_write_capability(
+                        transport, inverter, key, enabled,
+                    ), enabled)
+                    expected.append(prefix + flag)
+        self.assertEqual(transport.commands, expected)
+
+    def test_exact_command_maps_override_prefix_and_never_fall_back(self) -> None:
+        cap = load_driver_profile("pi30_ascii/models/pi30_max.json").get_capability("buzzer_enabled")
+        cap = replace(cap, command="LEGACY", command_map={1: "PEa"})
+        self.assertEqual(_build_write_command(cap, 1), "PEa")
+        with self.assertRaisesRegex(ValueError, "unsupported_write_value:buzzer_enabled:0"):
+            _build_write_command(cap, 0)
 
     async def test_write_numeric_capability_formats_scaled_voltage_command(self) -> None:
         driver = Pi30Driver()
