@@ -404,6 +404,21 @@ select a similar retail model by guesswork.
 
 ## Control mode
 
+For **SmartESS 0925**, `block:config` in the unsupported-command diagnostic
+means the large configuration read is skipped, not that every setting is
+unavailable. Supported settings can still be read individually. Those fallback
+reads refresh on the slow configuration cadence: at least 60 seconds or six
+polling intervals, whichever is longer. Changes made on the inverter panel or
+in its app may therefore take that long to appear in HA. A failed read is not
+reported as a fresh value. An individually unsupported register stays skipped
+until **Re-check supported commands** is requested.
+
+The current 0925 profile has no decoded clock fields or time controls for its
+`time_settings` range, so ordinary polling no longer requests that unused range.
+An older saved `block:time_settings` diagnostic can remain; it is not a new
+communication failure or proof that the inverter has no clock settings. Neither
+of these diagnostics overrides an explicit **Read-only** choice.
+
 For **Anenji ANJ-6200-48PL** (layout 2/model `0x2300`), Output Source Priority
 uses **SUB / SBU / SUF / ZEC**, not the SMG 6200 mode names. The owner has confirmed
 all four selections in HA and on the inverter display, so this selector is

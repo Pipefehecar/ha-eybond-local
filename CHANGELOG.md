@@ -160,6 +160,14 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- SmartESS 0925 refreshes supported individual configuration registers on the
+  slow polling cadence when a bulk read fails or is already skipped (#59).
+  Cached fallback values no longer prevent later panel/cloud changes from being
+  read. Failed refreshes do not publish stale values as new samples; unsupported
+  individual reads remain skipped. Runtime polling omits schema ranges with no
+  decoded fields or readable controls, including the unused time-settings range.
+  Control permissions, write commands and explicit diagnostic plans are unchanged.
+
 - PI30 MAX flag switches use case-sensitive lowercase flag letters (`PEa`/`PDa`,
   etc.) from their profile instead of the legacy PI30 uppercase commands that
   some MAX firmware rejects with NAK (#64). Exact command maps preserve wire

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,8 +18,10 @@ from custom_components.eybond_local.drivers.read_result import (  # noqa: E402
     DriverReadResult,
 )
 from custom_components.eybond_local.drivers.smartess_local import SmartEssLocalDriver  # noqa: E402
+from custom_components.eybond_local.drivers.command_support import seed_unsupported_commands  # noqa: E402
+from custom_components.eybond_local.metadata.register_schema_loader import load_register_schema  # noqa: E402
 from custom_components.eybond_local.fixtures.transport import FixtureTransport, FixtureTransportError  # noqa: E402
-from custom_components.eybond_local.models import DetectedInverter, ProbeTarget  # noqa: E402
+from custom_components.eybond_local.models import DetectedInverter, ProbeTarget, RegisterValueSpec  # noqa: E402
 
 
 def _delta_projection(result: DriverReadResult) -> dict[str, object]:
@@ -368,6 +372,154 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
             "individual_non_action_control_registers",
         )
 
+    async def test_successful_fallback_refreshes_only_on_slow_cadence(self) -> None:
+        for interval, due in ((10.0, 160.0), (30.0, 280.0)):
+            with self.subTest(interval=interval):
+                transport = self._transport(fail_config_bulk=True)
+                reads = _record_reads(transport)
+                state = {}
+                inverter = self._inverter()
+
+                async def poll(now):
+                    return await self.driver.async_read_values(
+                        transport, inverter, runtime_state=state,
+                        poll_interval=interval, now_monotonic=now,
+                    )
+
+                first = await poll(100.0)
+                self.assertIs(first.values["lcd_backlight_enabled"], True)
+                transport._registers[5004] = 0  # external panel/cloud change
+                reads.clear()
+                early = await poll(due - 1)
+                self.assertNotIn((5004, 1), reads)
+                self.assertNotIn("lcd_backlight_enabled", early.values)
+                reads.clear()
+                refreshed = await poll(due)
+                self.assertEqual(reads.count((5004, 1)), 1)
+                self.assertIs(refreshed.values["lcd_backlight_enabled"], False)
+
+    async def test_persisted_bulk_skip_preserves_fresh_individual_reads(self) -> None:
+        transport = self._transport(fail_config_bulk=True)
+        reads = _record_reads(transport)
+        state = {}
+        seed_unsupported_commands(state, ["block:config", "block:time_settings"])
+        for now, backlight in ((100.0, 1), (160.0, 0), (220.0, 1)):
+            transport._registers[5004] = backlight
+            reads.clear()
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10.0, now_monotonic=now,
+            )
+            self.assertNotIn((5001, 33), reads)
+            self.assertEqual(reads.count((5004, 1)), 1)
+            self.assertIs(result.values["lcd_backlight_enabled"], bool(backlight))
+
+    async def test_failed_fallback_is_not_fresh_and_retry_is_paced(self) -> None:
+        transport = self._transport(fail_config_bulk=True)
+        reads = _record_reads(transport)
+        original = transport._handle_read_holding
+        fail = False
+
+        def flaky(payload):
+            if fail and int.from_bytes(payload[2:4], "big") == 5004:
+                reads.append((5004, 1))
+                raise FixtureTransportError("single_register_timeout")
+            return original(payload)
+
+        transport._handle_read_holding = flaky
+        state = {}
+        seed_unsupported_commands(state, ["block:config"])
+
+        async def poll(now):
+            return await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10.0, now_monotonic=now,
+            )
+
+        self.assertIs((await poll(100.0)).values["lcd_backlight_enabled"], True)
+        fail = True
+        reads.clear()
+        failed = await poll(160.0)
+        self.assertEqual(reads.count((5004, 1)), 1)
+        self.assertNotIn("lcd_backlight_enabled", failed.values)
+        self.assertIn("buzzer_enabled", failed.values)
+        reads.clear()
+        self.assertNotIn("lcd_backlight_enabled", (await poll(170.0)).values)
+        self.assertNotIn((5004, 1), reads)
+        fail = False
+        transport._registers[5004] = 0
+        self.assertIs((await poll(220.0)).values["lcd_backlight_enabled"], False)
+
+    async def test_individual_unsupported_register_stays_skipped(self) -> None:
+        transport = self._transport(fail_config_bulk=True)
+        reads = _record_reads(transport)
+        state = {}
+        seed_unsupported_commands(state, ["block:config", "register:5004"])
+        for now in (100.0, 160.0):
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10.0, now_monotonic=now,
+            )
+            self.assertNotIn("lcd_backlight_enabled", result.values)
+            self.assertIn("buzzer_enabled", result.values)
+        self.assertNotIn((5004, 1), reads)
+        self.assertEqual(reads.count((5002, 1)), 2)
+
+    async def test_unused_time_block_is_not_polled(self) -> None:
+        transport = self._transport()
+        reads = _record_reads(transport)
+        await self.driver.async_read_values(
+            transport, self._inverter(), runtime_state={},
+            poll_interval=10.0, now_monotonic=100.0,
+        )
+        self.assertNotIn((6030, 6), reads)
+        self.assertIn((5001, 33), reads)
+
+    async def test_fallback_replaces_previous_bulk_value_without_writes(self) -> None:
+        transport = self._transport()
+        reads = _record_reads(transport)
+        original = transport._handle_read_holding
+        fail_bulk = False
+
+        def switching(payload):
+            if fail_bulk and int.from_bytes(payload[2:4], "big") == 5001:
+                raise FixtureTransportError("bulk_read_timeout")
+            return original(payload)
+
+        def reject_write(payload):
+            self.fail("polling must not write inverter settings")
+
+        transport._handle_read_holding = switching
+        transport._handle_write_single = reject_write
+        transport._handle_write_multiple = reject_write
+        state = {}
+        for now, expected in ((100.0, True), (160.0, False)):
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state=state,
+                poll_interval=10.0, now_monotonic=now,
+            )
+            self.assertIs(result.values["lcd_backlight_enabled"], expected)
+            fail_bulk = True
+            transport._registers[5004] = 0
+        self.assertEqual(reads.count((5004, 1)), 1)
+
+    async def test_schema_range_with_a_decoded_consumer_remains_polled(self) -> None:
+        schema = load_register_schema(self.driver.register_schema_name)
+        schema = replace(schema, spec_sets={
+            **schema.spec_sets,
+            "time_settings": (RegisterValueSpec(key="test_word", register=6030),),
+        })
+        transport = self._transport()
+        reads = _record_reads(transport)
+        with patch("custom_components.eybond_local.drivers.smartess_local.load_register_schema",
+                   return_value=schema):
+            result = await self.driver.async_read_values(
+                transport, self._inverter(), runtime_state={},
+                poll_interval=10.0, now_monotonic=100.0,
+            )
+        self.assertIn((6030, 6), reads)
+        self.assertEqual(result.values["test_word"], 0)
+
     async def test_write_scaled_control_decodes_readback(self) -> None:
         transport = self._transport()
         inverter = self._inverter()
@@ -380,3 +532,20 @@ class SmartEssLocalDriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, 57.2)
+
+
+def _record_reads(transport):
+    reads = []
+    original = transport._handle_read_holding
+
+    def recording(payload):
+        reads.append((int.from_bytes(payload[2:4], "big"),
+                      int.from_bytes(payload[4:6], "big")))
+        return original(payload)
+
+    transport._handle_read_holding = recording
+    return reads
+
+
+if __name__ == "__main__":
+    unittest.main()

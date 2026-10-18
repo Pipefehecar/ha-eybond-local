@@ -224,6 +224,7 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
         values_cache: dict[str, Any] = cache.setdefault("values", {})
         register_cache: dict[int, int] = cache.setdefault("registers", {})
         last_read: dict[str, float] = cache.setdefault("last_read", {})
+        fallback_last_attempt: dict[str, float] = cache.setdefault("fallback_last_attempt", {})
         cycle_values: dict[str, Any] = {}
         cycle_registers: dict[int, int] = {}
 
@@ -247,6 +248,15 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
         for block in schema.blocks:
             if block.count <= 0:
                 continue
+            # A schema range alone is not a runtime consumer. In particular,
+            # 6030..6035 currently has no decoded fields or readable controls.
+            # Keep that range available to explicit diagnostic read plans.
+            if not schema.spec_sets.get(block.key) and not any(
+                capability.value_kind != "action"
+                and block.start <= capability.register < block.start + block.count
+                for capability in self.write_capabilities
+            ):
+                continue
             if not _is_block_due(
                 block.key,
                 last_read,
@@ -255,44 +265,39 @@ class SmartEssLocalDriver(ModbusWriteErrorMixin, InverterDriver):
             ):
                 continue
             block_cache_key = f"block:{block.key}"
-            if command_skipped_as_unsupported(runtime_state, block_cache_key):
-                # The bulk read is known-rejected for this device; keep the
-                # cheap per-register capability fallbacks (they have their own
-                # negative cache) instead of burning a timeout every cycle.
-                await _read_capability_register_fallbacks(
-                    self,
+            words = None
+            if not command_skipped_as_unsupported(runtime_state, block_cache_key):
+                session = self._session(
                     transport,
-                    inverter.probe_target,
-                    self.write_capabilities,
-                    block_start=block.start,
-                    block_count=block.count,
-                    register_cache=register_cache,
-                    updated_registers=cycle_registers,
-                    runtime_state=runtime_state,
+                    _target_for_block(inverter.probe_target, block.key),
                 )
-                continue
-            session = self._session(
-                transport,
-                _target_for_block(inverter.probe_target, block.key),
-            )
-            try:
-                words = _normalize_block_words(
-                    block.key,
-                    await _timed_read(session, block_cache_key, block.start, block.count),
-                )
-            except Exception:
-                record_command_failure(runtime_state, block_cache_key)
-                await _read_capability_register_fallbacks(
-                    self,
-                    transport,
-                    inverter.probe_target,
-                    self.write_capabilities,
-                    block_start=block.start,
-                    block_count=block.count,
-                    register_cache=register_cache,
-                    updated_registers=cycle_registers,
-                    runtime_state=runtime_state,
-                )
+                try:
+                    words = _normalize_block_words(
+                        block.key,
+                        await _timed_read(session, block_cache_key, block.start, block.count),
+                    )
+                except Exception:
+                    record_command_failure(runtime_state, block_cache_key)
+            if words is None:
+                # Pace attempts, including failures, independently of bulk
+                # success. Cached values are not permission to skip supported
+                # single-register reads forever, nor proof of freshness.
+                if _is_block_due(
+                    block.key, fallback_last_attempt,
+                    now=now, poll_interval=poll_interval,
+                ):
+                    fallback_last_attempt[block.key] = now
+                    await _read_capability_register_fallbacks(
+                        self,
+                        transport,
+                        inverter.probe_target,
+                        self.write_capabilities,
+                        block_start=block.start,
+                        block_count=block.count,
+                        register_cache=register_cache,
+                        updated_registers=cycle_registers,
+                        runtime_state=runtime_state,
+                    )
                 continue
             record_command_success(runtime_state, block_cache_key)
             last_read[block.key] = now
@@ -612,17 +617,19 @@ async def _read_capability_register_fallbacks(
     """Read individual capability registers when a bulk metadata block is rejected."""
 
     block_end = block_start + block_count
+    attempted: set[int] = set()
     for capability in capabilities:
         if capability.value_kind == "action":
             continue
         register = int(capability.register)
-        if register in register_cache:
+        if register in attempted:
             continue
         if not block_start <= register < block_end:
             continue
         register_cache_key = f"register:{register}"
         if command_skipped_as_unsupported(runtime_state, register_cache_key):
             continue
+        attempted.add(register)
         session = driver._session(transport, _target_for_register(target, register))
         try:
             words = _normalize_register_words(register, await session.read_holding(register, 1))
