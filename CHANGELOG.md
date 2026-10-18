@@ -154,6 +154,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Fixed
 
+- Aninerel ANL-4200T-24L-W-PRO source-priority presets now use this model's
+  five-value enum: the PV/grid-backup preset selects SUB (3), not SOL (1).
+  Model-specific button names and descriptions distinguish source priorities
+  from forced grid disconnection and explain unchanged-setting no-ops. Existing
+  preset keys are preserved; other models and untested-control policy are unchanged.
+
 - SmartESS/DESSMonitor learning now distinguishes a confirmed zero-request
   connection failure from an uncertain submitted command. Exact no-request
   receipts allow normal endpoint recovery, survive interrupted finalization,

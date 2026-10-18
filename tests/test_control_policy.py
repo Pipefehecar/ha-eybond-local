@@ -56,6 +56,18 @@ class ControlPolicyTests(unittest.TestCase):
             )
         )
 
+    def test_aninerel_discharge_current_stays_untested_and_full_control_only(self) -> None:
+        profile = load_driver_profile("modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json")
+        capability = profile.get_capability("max_discharge_current_protection")
+        self.assertEqual(capability.register, 351)
+        self.assertFalse(capability.tested)
+        self.assertFalse(can_expose_capability(
+            capability, control_mode="auto", detection_confidence="high"
+        ))
+        self.assertTrue(can_expose_capability(
+            capability, control_mode="full", detection_confidence="high"
+        ))
+
     def test_control_mode_full_overrides_confidence(self) -> None:
         self.assertTrue(controls_enabled(control_mode="full", detection_confidence="none"))
         self.assertEqual(

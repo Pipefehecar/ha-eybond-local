@@ -429,6 +429,91 @@ class ProfileLoaderTests(unittest.TestCase):
             runtime_state.warnings,
         )
 
+    def test_aninerel_presets_use_model_specific_priorities_with_stable_keys(self) -> None:
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        presets = {preset.key: preset for preset in profile.presets}
+        self.assertEqual(
+            set(presets),
+            {"off_grid_self_consumption", "hybrid_pv_with_grid_backup"},
+        )
+        expected = {
+            "off_grid_self_consumption": (
+                "PV and Battery Priority (SBU)",
+                [("output_source_priority", 2, "Solar-Battery-Utility (SBU)"),
+                 ("charge_source_priority", 3, "Only Solar (OSO)")],
+            ),
+            "hybrid_pv_with_grid_backup": (
+                "PV With Grid Backup (SUB)",
+                [("output_source_priority", 3, "Solar-Utility-Battery (SUB)"),
+                 ("charge_source_priority", 1, "Solar First (CSO)")],
+            ),
+        }
+        for key, (title, items) in expected.items():
+            with self.subTest(preset=key):
+                preset = presets[key]
+                self.assertEqual(preset.title, title)
+                self.assertEqual(
+                    [(item.capability_key, item.value,
+                      profile.get_capability(item.capability_key).enum_value_map[item.value])
+                     for item in preset.items],
+                    items,
+                )
+                self.assertTrue(preset.requires_confirm)
+                self.assertIn("No writes are sent when both settings already match", preset.description)
+
+    def test_aninerel_sub_preset_does_not_treat_sol_as_already_applied(self) -> None:
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        preset = next(p for p in profile.presets if p.key == "hybrid_pv_with_grid_backup")
+        # Issue #63 archive: SOL + CSO matched the inherited preset, not SUB.
+        values = {
+            "operating_mode": "Mains",
+            "output_source_priority": "Solar First (SOL)",
+            "charge_source_priority": "Solar First (CSO)",
+            "battery_connected": True,
+            "charging_inactive": True,
+        }
+        self.assertFalse(preset.runtime_state(profile, values).matches_current)
+        values["output_source_priority"] = "Solar-Utility-Battery (SUB)"
+        self.assertTrue(preset.runtime_state(profile, values).matches_current)
+
+    def test_aninerel_sbu_preset_preserves_capability_warnings(self) -> None:
+        profile = profile_loader.load_driver_profile(
+            "modbus_smg/models/aninerel_anl_4200t_24l_w_pro.json"
+        )
+        preset = next(p for p in profile.presets if p.key == "off_grid_self_consumption")
+        values = {
+            "operating_mode": "Mains",
+            "output_source_priority": "Solar-Battery-Utility (SBU)",
+            "charge_source_priority": "Only Solar (OSO)",
+            "battery_connected": True,
+            "charging_inactive": False,
+        }
+        state = preset.runtime_state(profile, values)
+        self.assertTrue(state.matches_current)
+        self.assertEqual(preset.conditions, ())
+        self.assertNotIn("This recommendation is intended for Off-Grid operation.", state.warnings)
+        self.assertTrue(any("Mains" in warning for warning in state.warnings))
+        self.assertTrue(any("Stop active battery charging" in warning for warning in state.warnings))
+        self.assertIn("not a command to disconnect the grid", preset.description)
+
+    def test_aninerel_preset_override_does_not_change_classic_or_smg6200(self) -> None:
+        for name in (
+            "modbus_smg/protocols/classic_smg_rs232_v1.json",
+            "modbus_smg/models/smg_6200.json",
+        ):
+            with self.subTest(profile=name):
+                profile = profile_loader.load_driver_profile(name)
+                preset = next(p for p in profile.presets if p.key == "hybrid_pv_with_grid_backup")
+                self.assertEqual(preset.title, "Hybrid PV With Grid Backup")
+                self.assertEqual(
+                    [(item.capability_key, item.value) for item in preset.items],
+                    [("output_source_priority", 1), ("charge_source_priority", 1)],
+                )
+
     def test_verified_default_smg_equalization_controls_are_enabled_by_default(self) -> None:
         profile_loader.load_driver_profile.cache_clear()
 

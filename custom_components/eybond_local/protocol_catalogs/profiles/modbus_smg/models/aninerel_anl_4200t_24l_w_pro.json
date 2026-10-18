@@ -7,6 +7,33 @@
   "capability_defaults": {
     "support_tier": ""
   },
+  "presets": [
+    {
+      "key": "off_grid_self_consumption",
+      "title": "PV and Battery Priority (SBU)",
+      "description": "Set output priority to SBU (PV, then battery, then utility) and charging to Only Solar (OSO). These are source priorities, not a command to disconnect the grid or force an immediate off-grid transfer. No writes are sent when both settings already match.",
+      "conditions": []
+    },
+    {
+      "key": "hybrid_pv_with_grid_backup",
+      "title": "PV With Grid Backup (SUB)",
+      "description": "Set output priority to SUB (PV, then utility, then battery) and charging to Solar First (CSO). These are source priorities, not a grid connection command. No writes are sent when both settings already match.",
+      "items": [
+        {
+          "capability_key": "output_source_priority",
+          "value": 3,
+          "order": 100,
+          "reason": "Select this model's SUB mode: PV first, utility second, battery last."
+        },
+        {
+          "capability_key": "charge_source_priority",
+          "value": 1,
+          "order": 110,
+          "reason": "Prefer solar charging while allowing utility assistance."
+        }
+      ]
+    }
+  ],
   "capabilities": [
     {
       "key": "battery_bulk_voltage",
