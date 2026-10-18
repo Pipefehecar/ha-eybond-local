@@ -6,7 +6,11 @@ from collections.abc import Awaitable, Callable
 
 from ..connection.branch_registry import get_connection_branch_for_spec
 from ..connection.models import ConnectionSpec, EybondConnectionSpec
-from ..const import CONNECTION_TYPE_EYBOND, DEFAULT_DRIVER_DETECTION_STRATEGY
+from ..const import (
+    CONNECTION_TYPE_EYBOND,
+    DEFAULT_DRIVER_DETECTION_STRATEGY,
+    PI30_FLAG_CASE_PROFILE,
+)
 from .hub import EybondHub
 from .manager import RuntimeManager
 
@@ -16,6 +20,7 @@ def create_runtime_manager(
     *,
     driver_hint: str,
     driver_detection_strategy: str = DEFAULT_DRIVER_DETECTION_STRATEGY,
+    pi30_flag_command_case: str = PI30_FLAG_CASE_PROFILE,
     connection_mode: str = "",
     collector_mutation_guard: Callable[[], Awaitable[None]] | None = None,
 ) -> RuntimeManager:
@@ -33,6 +38,7 @@ def create_runtime_manager(
         connection=connection,
         driver_hint=driver_hint,
         driver_detection_strategy=driver_detection_strategy,
+        pi30_flag_command_case=pi30_flag_command_case,
         connection_mode=connection_mode,
         collector_mutation_guard=collector_mutation_guard,
     )

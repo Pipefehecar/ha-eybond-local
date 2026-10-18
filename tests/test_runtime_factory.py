@@ -31,9 +31,11 @@ class RuntimeFactoryTests(unittest.TestCase):
             ),
             driver_hint="auto",
             connection_mode="known_ip",
+            pi30_flag_command_case="lower",
         )
 
         self.assertIsInstance(runtime, EybondHub)
+        self.assertEqual(runtime._pi30_flag_command_case, "lower")
 
     def test_runtime_factory_owns_concrete_runtime_construction(self) -> None:
         connection = EybondConnectionSpec(
@@ -63,6 +65,7 @@ class RuntimeFactoryTests(unittest.TestCase):
             connection=connection,
             driver_hint="auto",
             driver_detection_strategy="first_match",
+            pi30_flag_command_case="profile",
             connection_mode="known_ip",
             collector_mutation_guard=None,
         )

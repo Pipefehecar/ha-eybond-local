@@ -166,6 +166,53 @@ async def test_options_flow_entry_is_not_loaded_requirement(
     assert result["type"] in (FlowResultType.FORM, FlowResultType.MENU)
 
 
+@pytest.mark.parametrize("flag_case", ["profile", "lower", "upper"])
+async def test_pi30_flag_case_survives_real_options_setup_and_reload_without_writes(
+    hass, collector_entry, fake_runtime, monkeypatch, flag_case,
+):
+    from unittest.mock import AsyncMock
+    from conftest import FakeRuntimeManager
+
+    received = []
+    original_init = FakeRuntimeManager.__init__
+
+    def initialize(self, *args, **kwargs):
+        received.append(kwargs["pi30_flag_command_case"])
+        original_init(self, *args, **kwargs)
+
+    write = AsyncMock(side_effect=AssertionError("Saving a dialect must not write inverter settings"))
+    monkeypatch.setattr(FakeRuntimeManager, "__init__", initialize)
+    monkeypatch.setattr(FakeRuntimeManager, "async_write_capability", write)
+    hass.config_entries.async_update_entry(collector_entry, data={
+        **collector_entry.data, "detected_driver": "pi30", "detected_model": "PI30 3000",
+    })
+    flow = await hass.config_entries.options.async_init(collector_entry.entry_id)
+    flow = await hass.config_entries.options.async_configure(
+        flow["flow_id"], user_input={"next_step_id": "runtime"},
+    )
+    assert flow["step_id"] == "runtime"
+    assert "pi30_flag_command_case" in flow["data_schema"].schema
+    flow = await hass.config_entries.options.async_configure(flow["flow_id"], user_input={
+        "driver_hint": "auto", "driver_detection_strategy": "first_match",
+        "control_mode": "read_only", "poll_mode": "auto",
+        "pi30_flag_command_case": flag_case,
+        "connection": {
+            "server_ip": SYNTHETIC_SERVER_IP, "collector_ip": SYNTHETIC_COLLECTOR_IP,
+            "tcp_port": 8899, "udp_port": 58899, "discovery_target": SYNTHETIC_COLLECTOR_IP,
+            "discovery_interval": 3, "heartbeat_interval": 60,
+        },
+    })
+    assert flow["type"] is FlowResultType.CREATE_ENTRY
+    assert collector_entry.options["pi30_flag_command_case"] == flag_case
+    assert collector_entry.options["control_mode"] == "read_only"
+    assert await hass.config_entries.async_setup(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_reload(collector_entry.entry_id)
+    await hass.async_block_till_done()
+    assert received == [flag_case, flag_case]
+    write.assert_not_awaited()
+
+
 @pytest.mark.parametrize("provider", ["smartess", ""])
 async def test_smartclient_read_only_analysis_completes_without_inverter(
     hass: HomeAssistant, collector_entry: MockConfigEntry, provider: str, monkeypatch,

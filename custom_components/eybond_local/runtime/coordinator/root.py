@@ -21,6 +21,8 @@ from ...const import (
     CONF_DRIVER_DETECTION_STRATEGY,
     CONF_DRIVER_HINT,
     CONF_POLL_INTERVAL,
+    CONF_PI30_FLAG_COMMAND_CASE,
+    PI30_FLAG_CASE_PROFILE,
     DEFAULT_DRIVER_DETECTION_STRATEGY,
     DEFAULT_POLL_INTERVAL,
     DOMAIN,
@@ -138,6 +140,9 @@ class EybondLocalCoordinator(
             connection_spec,
             driver_hint=runtime_driver_key,
             driver_detection_strategy=driver_detection_strategy,
+            pi30_flag_command_case=entry.options.get(
+                CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE,
+            ),
             connection_mode=entry.data.get(CONF_CONNECTION_MODE, ""),
             collector_mutation_guard=self._cloud_learning_mutation_fence.require_unheld,
         )

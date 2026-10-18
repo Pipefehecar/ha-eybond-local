@@ -58,6 +58,26 @@ Full scan can take noticeably longer. It is not a deeper network scan and does
 not search more collector IP addresses; it only checks more inverter protocols
 through the already connected collector.
 
+### PI30 flag command case
+
+For PI30 devices, **PI30 flag command case** defaults to **Profile default**.
+Older PI30 profiles use commands such as `PEA/PDA`; PI30 MAX uses `PEa/PDa`.
+Some firmware rejects the wrong letter case with `NAK`, even when other settings
+work. A lowercase `QFLAG` reply alone does not establish the write dialect.
+
+When requested by support, select **Lowercase flag letters (PEa/PDa)** or
+**Uppercase flag letters (PEA/PDA)**. This entry-specific preference changes only
+known PE/PD flag commands, not the model profile, voltage/current settings,
+polling queries, device-scoped learned controls or other command formats. It covers all existing PE/PD switches,
+including protection-related flags; test only the ordinary switch requested by
+support (for example buzzer or backlight), not protection settings.
+
+Saving reloads the integration but does not write inverter settings. The choice
+applies to subsequent switch actions, with the existing control permissions and
+fresh readback checks unchanged. There is no automatic alternate-case retry after
+`NAK`. Choose **Profile default** to restore the profile's command spelling.
+Do not delete and re-add the device or switch its entire profile to MAX for this.
+
 ### More than one protocol matched
 
 If a Full scan confirms multiple protocols, the options menu shows

@@ -24,6 +24,7 @@ class _Hub(HubManagementMixin):
         self._inverter = inverter
         self._driver = pi30.Pi30Driver()
         self._runtime_read_state = {}
+        self._pi30_flag_command_case = "profile"
         self._link_manager = SimpleNamespace(transport=None)
         self._write_blockers = {}
         self._async_ensure_connected = AsyncMock()
@@ -40,6 +41,36 @@ class _Hub(HubManagementMixin):
 
 
 class Pi30SettingReadbackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_lowercase_option_reaches_write_and_fresh_readback(self):
+        self.hub._pi30_flag_command_case = "lower"
+        self.inverter.details["buzzer_enabled"] = False
+        self.hub.values["buzzer_enabled"] = False
+        self.session.request.side_effect = lambda cmd: "ACK" if cmd == "PEa" else "EaDbjkuvxyz"
+        # A reconnect can clear the driver read cache; the entry preference is
+        # still supplied at the next write, without changing the default map.
+        self.hub._runtime_read_state.clear()
+        result = await self.hub.async_write_capability("buzzer_enabled", True)
+        self.assertIs(result, True)
+        self.assertIs(self.hub.values["buzzer_enabled"], True)
+        self.assertEqual([c.args[0] for c in self.session.request.await_args_list], ["PEa", "QFLAG"])
+        self.assertIs(self.inverter.details["buzzer_enabled"], False)
+
+    async def test_lowercase_nak_is_not_retried_with_uppercase(self):
+        self.hub._pi30_flag_command_case = "lower"
+        self.session.request.side_effect = Pi30Error("nak")
+        with self.assertRaises(Pi30Error):
+            await self.hub.async_write_capability("buzzer_enabled", False)
+        self.assertEqual([c.args[0] for c in self.session.request.await_args_list], ["PDa"])
+
+    async def test_explicit_lowercase_ack_does_not_bypass_readback(self):
+        self.hub._pi30_flag_command_case = "lower"
+        self.hub.values["lcd_backlight_enabled"] = True
+        self.session.request.side_effect = lambda cmd: "ACK" if cmd == "PDx" else "EaxD"
+        with self.assertRaisesRegex(RuntimeError, "write_not_confirmed"):
+            await self.hub.async_write_capability("lcd_backlight_enabled", False)
+        self.assertIs(self.hub.values["lcd_backlight_enabled"], True)
+        self.assertEqual([c.args[0] for c in self.session.request.await_args_list], ["PDx", "QFLAG", "QFLAG"])
+
     async def asyncSetUp(self):
         self.inverter = _saved_binding()
         self.inverter.capabilities = load_driver_profile("pi30_ascii.json").capabilities

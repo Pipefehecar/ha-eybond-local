@@ -6523,6 +6523,37 @@ class ConfigFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(options._config_entry.data["detected_model"], "")
         self.assertEqual(options._config_entry.data["detected_serial"], "")
 
+    async def test_pi30_flag_case_option_is_explicit_persistent_and_reversible(self) -> None:
+        options = self._make_options_flow()
+        form = await options.async_step_runtime()
+        self.assertNotIn("pi30_flag_command_case", form["data_schema"].schema)
+        options._config_entry.data["detected_driver"] = "pi30"
+        form = await options.async_step_runtime()
+        selector = form["data_schema"].schema["pi30_flag_command_case"]
+        self.assertEqual([opt["value"] for opt in selector.config.kwargs["options"]], ["profile", "lower", "upper"])
+        payload = {
+            "driver_hint": "auto", "control_mode": "auto", "poll_mode": "auto",
+            "connection": {key: options._config_entry.data[key] for key in (
+                "server_ip", "collector_ip", "tcp_port", "udp_port",
+                "discovery_target", "discovery_interval", "heartbeat_interval",
+            )},
+        }
+        for choice in ("lower", "upper", "profile"):
+            result = await options.async_step_runtime({
+                **payload, "pi30_flag_command_case": choice,
+            })
+            self.assertEqual(result["type"], "create_entry", result)
+            self.assertEqual(result["data"]["pi30_flag_command_case"], choice)
+            self.assertEqual(options._config_entry.data["detected_driver"], "pi30")
+            # Older forms/polling-only submissions must not silently reset it.
+            result = await options.async_step_runtime(payload)
+            self.assertEqual(result["data"]["pi30_flag_command_case"], choice)
+        for invalid in (True, [], "guess", "LOWER"):
+            result = await options.async_step_runtime({
+                **payload, "pi30_flag_command_case": invalid,
+            })
+            self.assertEqual(result["errors"]["pi30_flag_command_case"], "invalid_selection")
+
     async def test_options_runtime_omits_absent_advertised_route_pair(self) -> None:
         options = self._make_options_flow()
 

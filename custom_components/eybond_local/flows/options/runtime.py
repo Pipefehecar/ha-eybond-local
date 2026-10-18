@@ -52,6 +52,7 @@ from ...const import (
     CONF_DETECTION_CONFIDENCE,
     CONF_DRIVER_DETECTION_STRATEGY,
     CONF_DRIVER_HINT,
+    CONF_PI30_FLAG_COMMAND_CASE,
     CONF_POLL_INTERVAL,
     CONF_POLL_MODE,
     CONF_PROXY_ENABLED,
@@ -68,6 +69,8 @@ from ...const import (
     DRIVER_HINT_AUTO,
     POLL_MODE_AUTO,
     POLL_MODE_MANUAL,
+    PI30_FLAG_CASE_PROFILE,
+    PI30_FLAG_COMMAND_CASES,
 )
 from ...control_policy import control_mode_options
 from ...drivers.registry import driver_options
@@ -506,6 +509,12 @@ class RuntimeOptionsMixin:
             )
             if flat_input.get(CONF_POLL_MODE) not in {POLL_MODE_AUTO, POLL_MODE_MANUAL}:
                 errors[CONF_POLL_MODE] = "invalid_selection"
+            flag_case = flat_input.get(
+                CONF_PI30_FLAG_COMMAND_CASE,
+                self._config_entry.options.get(CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE),
+            )
+            if type(flag_case) is not str or flag_case not in PI30_FLAG_COMMAND_CASES:
+                errors[CONF_PI30_FLAG_COMMAND_CASE] = "invalid_selection"
             detection_strategy = flat_input.get(
                 CONF_DRIVER_DETECTION_STRATEGY,
                 self._config_entry.options.get(
@@ -601,6 +610,26 @@ class RuntimeOptionsMixin:
         if poll_mode == POLL_MODE_MANUAL:
             schema_fields[vol.Required(CONF_POLL_INTERVAL, default=poll_interval)] = (
                 _poll_interval_selector(self._poll_policy_driver_key())
+            )
+        if self._poll_policy_driver_key() == "pi30":
+            flag_case = self._config_entry.options.get(CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE)
+            if type(flag_case) is not str or flag_case not in PI30_FLAG_COMMAND_CASES:
+                flag_case = PI30_FLAG_CASE_PROFILE
+            labels = {
+                "profile": "Profile default",
+                "lower": "Lowercase flag letters (PEa/PDa)",
+                "upper": "Uppercase flag letters (PEA/PDA)",
+            }
+            schema_fields[vol.Required(CONF_PI30_FLAG_COMMAND_CASE, default=flag_case)] = SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(
+                        value=value,
+                        label=_selector_option_label(
+                            self._translation_bundle, CONF_PI30_FLAG_COMMAND_CASE, value, labels[value],
+                        ),
+                    ) for value in PI30_FLAG_COMMAND_CASES],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
             )
         schema_fields[vol.Required("connection")] = section(
             vol.Schema(
@@ -724,6 +753,16 @@ class RuntimeOptionsMixin:
             self._config_entry.options.get(CONF_POLL_MODE, POLL_MODE_MANUAL),
         )
         persisted_options[CONF_CONTROL_MODE] = flat_input[CONF_CONTROL_MODE]
+        # Keep the per-entry dialect across unrelated polling/connection edits.
+        # Saving this preference reloads the runtime; it sends no flag writes.
+        if self._poll_policy_driver_key() == "pi30" or CONF_PI30_FLAG_COMMAND_CASE in self._config_entry.options:
+            flag_case = flat_input.get(
+                CONF_PI30_FLAG_COMMAND_CASE,
+                self._config_entry.options.get(CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE),
+            )
+            if type(flag_case) is not str or flag_case not in PI30_FLAG_COMMAND_CASES:
+                raise ValueError("invalid_pi30_flag_command_case")
+            persisted_options[CONF_PI30_FLAG_COMMAND_CASE] = flag_case
         detection_strategy = flat_input.get(
             CONF_DRIVER_DETECTION_STRATEGY,
             self._config_entry.options.get(

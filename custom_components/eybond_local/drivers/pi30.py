@@ -8,6 +8,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ..const import (
+    CONF_PI30_FLAG_COMMAND_CASE,
+    PI30_FLAG_CASE_PROFILE,
+    PI30_FLAG_COMMAND_CASES,
+)
 from ..metadata.compiled_detection_catalog import (
     RESOLUTION_COMPATIBLE_GROUP,
     RESOLUTION_EXACT,
@@ -523,6 +528,10 @@ class Pi30Driver(InverterDriver):
         capability = _find_capability(capability_key, inverter.capabilities or self.write_capabilities)
         raw_value = _encode_capability_value(capability, value)
         command = _build_write_command(capability, raw_value)
+        command = _apply_flag_command_case(
+            capability, command,
+            (runtime_state or {}).get(CONF_PI30_FLAG_COMMAND_CASE, PI30_FLAG_CASE_PROFILE),
+        )
 
         session = self._session(transport, inverter.probe_target)
         response = await session.request(command)
@@ -1502,6 +1511,27 @@ def _validate_range(capability: WriteCapability, raw_value: int) -> None:
         raise ValueError(f"value_below_minimum:{capability.key}:{raw_value}")
     if capability.maximum is not None and raw_value > capability.maximum:
         raise ValueError(f"value_above_maximum:{capability.key}:{raw_value}")
+
+
+def _apply_flag_command_case(capability: WriteCapability, command: str, preference: str) -> str:
+    """Apply explicit flag-letter intent only to a known PE/PD command.
+
+    Profiles still own the default. Non-flag commands and device-scoped learned
+    controls are never rewritten. A NAK or QFLAG reply cannot select a dialect.
+    """
+
+    if type(preference) is not str or preference not in PI30_FLAG_COMMAND_CASES:
+        raise ValueError("invalid_pi30_flag_command_case")
+    flag = _PI30_BOOL_COMMANDS.get(capability.key)
+    if (
+        preference == PI30_FLAG_CASE_PROFILE
+        or capability.value_kind != "bool"
+        or capability.is_device_scoped_experimental
+        or flag is None
+        or command not in {f"PE{flag}", f"PD{flag}", f"PE{flag.lower()}", f"PD{flag.lower()}"}
+    ):
+        return command
+    return command[:2] + (flag.lower() if preference == "lower" else flag)
 
 
 def _build_write_command(capability: WriteCapability, raw_value: int) -> str:

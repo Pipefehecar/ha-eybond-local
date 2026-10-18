@@ -9,6 +9,12 @@ the GitHub release body should be rendered from the matching version section her
 
 ### Added
 
+- PI30 runtime options offer an explicit, per-entry PE/PD flag-letter case
+  override for firmware that rejects the profile default (#58/#64). Saving sends
+  no inverter writes. Defaults, non-flag/learned/custom commands, control gates
+  and fresh readback stay unchanged; rejected commands are not retried in another
+  dialect. Easun flag acceptance still needs owner confirmation.
+
 - Protected Shadow Learning can be explicitly repeated while retaining the
   original cloud protection hold. An exact local identity/endpoint/telemetry
   check precedes each new filtered route; prior journals are archived, ownership

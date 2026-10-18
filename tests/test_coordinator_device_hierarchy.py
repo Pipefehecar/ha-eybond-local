@@ -132,6 +132,9 @@ def _install_coordinator_stubs() -> None:
     const.CONF_ENTRY_ROLE = "entry_role"
     const.ENTRY_ROLE_LISTENER = "listener"
     const.CONF_CONTROL_MODE = "control_mode"
+    const.CONF_PI30_FLAG_COMMAND_CASE = "pi30_flag_command_case"
+    const.PI30_FLAG_CASE_PROFILE = "profile"
+    const.PI30_FLAG_COMMAND_CASES = ("profile", "lower", "upper")
     const.CONF_DETECTED_MODEL = "detected_model"
     const.CONF_DETECTED_DRIVER = "detected_driver"
     const.CONF_DETECTED_SERIAL = "detected_serial"
@@ -873,6 +876,9 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         cls._saved_modules = {
             name: sys.modules.pop(name, None) for name in _STUBBED_MODULE_NAMES
         }
+        # tearDownClass is skipped when setup fails. Always restore imports so
+        # a missing stub cannot poison later suites or strand an async wait.
+        cls.addClassCleanup(cls._restore_stubbed_modules)
         _install_coordinator_stubs()
 
         coordinator_module = importlib.import_module(
@@ -898,6 +904,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             recovery, "async_preserve_interrupted_learning_hold", new=AsyncMock()
         )
         cls._recovery_patch.start()
+        cls.addClassCleanup(cls._recovery_patch.stop)
         cls.coordinator_polling_module = importlib.import_module(
             "custom_components.eybond_local.runtime.coordinator.polling"
         )
@@ -961,8 +968,7 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
         )
 
     @classmethod
-    def tearDownClass(cls) -> None:
-        cls._recovery_patch.stop()
+    def _restore_stubbed_modules(cls) -> None:
         for name in reversed(_STUBBED_MODULE_NAMES):
             original = cls._saved_modules.get(name)
             if original is None:
@@ -986,7 +992,6 @@ class CoordinatorDeviceHierarchyTests(unittest.TestCase):
             parent = sys.modules.get(parent_name)
             if separator and parent is not None:
                 setattr(parent, child_name, module)
-        super().tearDownClass()
 
     def setUp(self) -> None:
         # CP2C: the endpoint-operation authority is a process-level singleton, so

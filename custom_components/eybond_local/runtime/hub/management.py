@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ...collector.management import CollectorManagementTransportError
+from ...const import CONF_PI30_FLAG_COMMAND_CASE
 from .common import (
     ADAPTER_COLLECTOR_AT_COMMANDS,
     CollectorEndpointWriteResult,
@@ -53,6 +54,11 @@ class HubManagementMixin:
         for attempt in range(2):
             try:
                 confirmation_started_at = monotonic()
+                # Runtime read state may be reset on reconnect. Reapply the
+                # explicit entry preference at the write boundary, never infer
+                # a dialect from QFLAG or retry a rejected write in another case.
+                if self._inverter.driver_key == "pi30":
+                    self._runtime_read_state[CONF_PI30_FLAG_COMMAND_CASE] = self._pi30_flag_command_case
                 written_value = await self._driver.async_write_capability(
                     self._link_manager.transport,
                     self._inverter,

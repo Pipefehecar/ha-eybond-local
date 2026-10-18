@@ -12,7 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-from custom_components.eybond_local.drivers.pi30 import Pi30Driver, _build_write_command
+from custom_components.eybond_local.drivers.pi30 import Pi30Driver, _apply_flag_command_case, _build_write_command
 from custom_components.eybond_local.metadata.profile_loader import load_driver_profile
 from custom_components.eybond_local.drivers.read_result import (
     DriverReadMode,
@@ -85,6 +85,51 @@ class _FakeTransport:
 
 
 class Pi30DriverTests(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_flag_case_preserves_default_and_exact_nonflag_commands(self):
+        for profile_name, default_letter in (
+            ("pi30_ascii/models/smartess_0925_compat.json", "A"),
+            ("pi30_ascii/models/pi30_max.json", "a"),
+        ):
+            profile = load_driver_profile(profile_name)
+            cap = profile.get_capability("buzzer_enabled")
+            for value, prefix in ((0, "PD"), (1, "PE")):
+                command = _build_write_command(cap, value)
+                self.assertEqual(_apply_flag_command_case(cap, command, "profile"), prefix + default_letter)
+                self.assertEqual(_apply_flag_command_case(cap, command, "lower"), prefix + "a")
+                self.assertEqual(_apply_flag_command_case(cap, command, "upper"), prefix + "A")
+                self.assertEqual(_build_write_command(cap, value), prefix + default_letter)
+            for command in ("CUSTOM0", "PEAB", "PEb", "PEA0"):
+                self.assertEqual(_apply_flag_command_case(cap, command, "lower"), command)
+            numeric = profile.get_capability("battery_bulk_voltage")
+            command = _build_write_command(numeric, 279)
+            self.assertEqual(_apply_flag_command_case(numeric, command, "lower"), command)
+            learned = replace(cap, experimental=True, metadata_scope="device")
+            self.assertEqual(_apply_flag_command_case(learned, "PEA", "lower"), "PEA")
+        for invalid in (None, [], True, "LOWER", "guess"):
+            with self.assertRaisesRegex(ValueError, "invalid_pi30_flag_command_case"):
+                _apply_flag_command_case(cap, "PEa", invalid)
+
+    async def test_issue58_profile_can_explicitly_use_lowercase_buzzer_and_backlight(self):
+        driver = Pi30Driver()
+        target = ProbeTarget(devcode=0x0102, collector_addr=255, device_addr=0)
+        transport = _FakeTransport({
+            (0x0102, 255, "QPI"): "PI30",
+            (0x0102, 255, "QPIRI"): "220.0 14.5 220.0 60.0 13.9 3200 3000 24.0 22.0 24.0 28.8 27.0 2 10 050 1 0 2 6 01 0 0 00.0 0 1",
+            (0x0102, 255, "QFLAG"): "EbzDajkuvxy",
+            **{(0x0102, 255, command): "ACK" for command in ("PEa", "PDa", "PEx", "PDx")},
+        })
+        inverter = await driver.async_probe(transport, target)
+        self.assertIsNotNone(inverter)
+        self.assertEqual(inverter.profile_name, "pi30_ascii/models/smartess_0925_compat.json")
+        transport.commands.clear()
+        for key in ("buzzer_enabled", "lcd_backlight_enabled"):
+            for value in (True, False):
+                await driver.async_write_capability(
+                    transport, inverter, key, value,
+                    runtime_state={"pi30_flag_command_case": "lower"},
+                )
+        self.assertEqual(transport.commands, ["PEa", "PDa", "PEx", "PDx"])
+
     async def test_generic_pi30_uses_own_current_choices_without_retail_guess(self):
         """Issue58 response shapes; identity is deliberately synthetic/absent."""
         target = ProbeTarget(devcode=0x0994, collector_addr=1, device_addr=0)
