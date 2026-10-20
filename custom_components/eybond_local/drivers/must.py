@@ -167,7 +167,9 @@ class MustPvPh18Driver(ModbusWriteErrorMixin, InverterDriver):
         if "model_prefix" in values and "model_suffix" in values:
             values["model_number"] = f"{values['model_prefix']}{values['model_suffix']}"
         diagnostics = {}
-        if schema.source_name == "must_pv_ph18/pv3300.json":
+        # The optional BMS read is declared by the schema (PV3300, PV3900), not
+        # by the model name, so other MUST models never send the extra read.
+        if any(block.key == "bms" for block in schema.blocks) and "bms" in schema.spec_sets:
             bms_values, diagnostics = await async_read_bms(
                 session, transport, inverter, schema,
                 runtime_state if runtime_state is not None else {},
